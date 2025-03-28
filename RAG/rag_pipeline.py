@@ -53,6 +53,17 @@ class RAGAugmentedDataset(Dataset):
         # Pre-compute augmented inputs
         self.augmented_inputs = self._create_augmented_inputs()
 
+        # Convert categorical labels to continuous values if provided
+        self.continuous_labels = None
+        if self.labels is not None:
+            # Update mapping to be consistent with thresholds in generate_rag_explanation
+            # 0 -> 0.16 (middle of easy range 0-0.33)
+            # 1 -> 0.5 (middle of medium range 0.33-0.67)
+            # 2 -> 0.83 (middle of hard range 0.67-1.0)
+            label_mapping = {0: 0.16, 1: 0.5, 2: 0.83}
+            self.continuous_labels = [label_mapping.get(label, label) for label in self.labels]
+
+
     def _create_augmented_inputs(self):
         augmented_inputs = []
 
@@ -94,35 +105,37 @@ class RAGAugmentedDataset(Dataset):
         # Convert dict of tensors to tensors and remove batch dimension
         item = {k: v.squeeze(0) for k, v in encoding.items()}
 
-        if self.labels is not None:
-            item['labels'] = torch.tensor(self.labels[idx])
+        if self.continuous_labels is not None:
+            item['labels'] = torch.tensor(self.continuous_labels[idx], dtype=torch.float)
 
         return item
 
 
 # Model with classification head
-class RAGQuestionDifficultyClassifier(torch.nn.Module):
-    def __init__(self, encoder_model, num_labels):
+class RAGQuestionDifficultyRegressor(torch.nn.Module):
+    def __init__(self, encoder_model):
         super().__init__()
         self.encoder = encoder_model
-        self.classifier = torch.nn.Linear(self.encoder.config.hidden_size, num_labels)
+        # Single output node with sigmoid activation
+        self.regressor = torch.nn.Sequential(
+            torch.nn.Linear(self.encoder.config.hidden_size, 1),
+            torch.nn.Sigmoid()
+        )
 
     def forward(self, input_ids, attention_mask, labels=None):
         outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
         pooled_output = outputs.last_hidden_state[:, 0, :]  # [CLS] token
-        logits = self.classifier(pooled_output)
+        score = self.regressor(pooled_output).squeeze(-1)
 
         loss = None
         if labels is not None:
-            loss_fn = torch.nn.CrossEntropyLoss()
-            loss = loss_fn(logits, labels)
+            loss_fn = torch.nn.MSELoss()
+            loss = loss_fn(score, labels)
 
-        return {"loss": loss, "logits": logits} if loss is not None else {"logits": logits}
-
+        return {"loss": loss, "score": score} if loss is not None else {"score": score}
 
 # Main pipeline function
-def build_rag_difficulty_classifier(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-base",
-                                    num_labels=3):
+def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-base"):
     # Step 1: Prepare the RAG retriever with the knowledge corpus
     documents = [Document(i, text) for i, text in enumerate(knowledge_corpus)]
     retriever = RAGRetriever(documents)
@@ -150,8 +163,8 @@ def build_rag_difficulty_classifier(train_df, valid_df, knowledge_corpus, model_
         k=3
     )
 
-    # Step 4: Initialize the model
-    model = RAGQuestionDifficultyClassifier(base_model, num_labels)
+    # Step 4: Initialize the regressor model
+    model = RAGQuestionDifficultyRegressor(base_model)
 
     # Step 5: Set up training arguments
     training_args = TrainingArguments(
@@ -165,13 +178,15 @@ def build_rag_difficulty_classifier(train_df, valid_df, knowledge_corpus, model_
         push_to_hub=False,
     )
 
-    # Step 6: Define evaluation metrics
+    # Step 6: Define evaluation metrics for regression
     def compute_metrics(eval_preds):
-        logits, labels = eval_preds
-        predictions = np.argmax(logits, axis=-1)
+        scores, labels = eval_preds
+        mse = ((scores - labels) ** 2).mean().item()
+        mae = abs(scores - labels).mean().item()
         return {
-            "accuracy": accuracy_score(labels, predictions),
-            "f1_macro": f1_score(labels, predictions, average="macro")
+            "mse": mse,
+            "mae": mae,
+            "rmse": mse ** 0.5
         }
 
     # Step 7: Initialize trainer
@@ -190,11 +205,10 @@ def build_rag_difficulty_classifier(train_df, valid_df, knowledge_corpus, model_
     model_artifacts = {
         "model": model,
         "tokenizer": tokenizer,
-        "retriever": retriever,
-        "id2label": {i: label for i, label in enumerate(sorted(set(train_df['difficulty'])))}
+        "retriever": retriever
     }
 
-    with open("difficulty_classifier_artifacts.pkl", "wb") as f:
+    with open("difficulty_regressor_artifacts.pkl", "wb") as f:
         pickle.dump(model_artifacts, f)
 
     return model_artifacts
@@ -205,7 +219,6 @@ def predict_difficulty_with_rag(question, answer, model_artifacts):
     model = model_artifacts["model"]
     tokenizer = model_artifacts["tokenizer"]
     retriever = model_artifacts["retriever"]
-    id2label = model_artifacts["id2label"]
 
     # Retrieve relevant documents
     retrieved_docs = retriever.retrieve(question, k=3)
@@ -226,49 +239,85 @@ def predict_difficulty_with_rag(question, answer, model_artifacts):
     with torch.no_grad():
         outputs = model(**inputs)
 
-    logits = outputs["logits"]
-    probabilities = torch.softmax(logits, dim=1)[0]
-    pred_class = torch.argmax(logits, dim=1).item()
-
-    difficulty = id2label[pred_class]
-    confidence = probabilities[pred_class].item()
+    difficulty_score = outputs["score"][0].item()  # Value between 0 and 1
 
     # Generate explanation that includes RAG context
-    explanation = generate_rag_explanation(question, answer, context, difficulty, confidence)
+    explanation = generate_rag_explanation(question, answer, context, difficulty_score)
 
     return {
-        "difficulty": difficulty,
-        "confidence": confidence,
+        "difficulty_score": difficulty_score,  # Continuous value between 0 and 1
         "explanation": explanation,
         "context_used": context  # Return the context used for transparency
     }
 
 
-def generate_rag_explanation(question, answer, context, difficulty, confidence):
-    # This could be further enhanced with feature importance
+def generate_rag_explanation(question, answer, context, difficulty_score):
     question_length = len(question.split())
     answer_length = len(answer.split())
-
-    # Extract key phrases from the context that might have influenced the prediction
     context_keywords = extract_key_phrases(context, question)
 
-    explanation = f"This question was classified as {difficulty} (confidence: {confidence:.2f}).\n\n"
+    # Convert continuous score to descriptive difficulty
+    if difficulty_score < 0.33:
+        difficulty_level = "easy"
+    elif difficulty_score < 0.67:
+        difficulty_level = "medium"
+    else:
+        difficulty_level = "hard"
 
-    # Include context-specific information
-    explanation += f"The classification was informed by similar questions in our knowledge base that cover: {', '.join(context_keywords[:3])}.\n\n"
+    explanation = f"This question was rated at {difficulty_score:.2f} on a scale of 0 (very easy) to 1 (very hard).\n\n"
+    explanation += f"The assessment was informed by similar questions that cover: {', '.join(context_keywords[:3])}.\n\n"
 
-    if difficulty == "easy":
+    if difficulty_score < 0.33:
         explanation += f"The question is {question_length} words long and uses straightforward language. "
         explanation += f"The answer is concise ({answer_length} words) and direct."
-    elif difficulty == "medium":
+    elif difficulty_score < 0.67:
         explanation += f"The question contains {question_length} words with moderate complexity. "
         explanation += f"The {answer_length}-word answer requires some domain knowledge."
-    else:  # hard
+    else:
         explanation += f"This {question_length}-word question uses complex concepts or requires deep understanding. "
         explanation += f"The detailed answer ({answer_length} words) demonstrates advanced reasoning."
 
     return explanation
 
+
+def llm_call(prompt, model_artifacts=None):
+    """
+    Generate enhanced explanations using either:
+    1. Your fine-tuned DeBERTa model (for simple attributes)
+    2. An external LLM API (for more elaborate explanations)
+    """
+    if model_artifacts:
+        # Option 1: Extract features using your DeBERTa
+        tokenizer = model_artifacts["tokenizer"]
+        model = model_artifacts["model"]
+
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+
+        with torch.no_grad():
+            # Get the embeddings from DeBERTa (not the difficulty score)
+            outputs = model.encoder(**inputs)
+            embeddings = outputs.last_hidden_state[:, 0, :]  # [CLS] token
+
+        # Use the embeddings to determine key characteristics
+        # This is simplified - you'd need additional layers to extract meaningful features
+        difficulty = prompt.split("Predicted difficulty: ")[1].split("\n")[0]
+
+        # Generate an explanation based on embedding features
+        # (In a real implementation, you might have another classifier head for explanation generation)
+        return f"Based on analysis of semantic features from DeBERTa, this question is {difficulty} difficulty because of its complexity level and knowledge requirements."
+
+    else:
+        # Option 2: Use external LLM API (OpenAI, Anthropic, etc.)
+        # import openai
+        # response = openai.ChatCompletion.create(
+        #     model="gpt-3.5-turbo",
+        #     messages=[{"role": "user", "content": prompt}]
+        # )
+        # return response.choices[0].message.content
+
+        # Fallback to simple template if no model or API available
+        difficulty = prompt.split("Predicted difficulty: ")[1].split("\n")[0]
+        return f"Based on analysis, this question is {difficulty} difficulty because of its complexity level and knowledge requirements."
 
 def extract_key_phrases(context, question, n=5):
     # Simplified key phrase extraction
@@ -307,21 +356,20 @@ def enhance_explanation(raw_explanation, difficulty, question, answer):
 # Example usage
 def main():
     # Load your data
-    train_df = pd.read_csv("train_difficulty_data.csv")
-    valid_df = pd.read_csv("valid_difficulty_data.csv")
+    train_df = pd.read_csv("./data/leetcode/leetcode_train.csv")
+    valid_df = pd.read_csv("./data/leetcode/leetcode_val.csv")
 
     # Load your knowledge corpus - this is what RAG retrieves from
     # This could be a large set of QA pairs, textbooks, or other relevant documents
-    with open("knowledge_corpus.txt", "r") as f:
+    with open("RAG/knowledge_corpus.txt", "r") as f:
         knowledge_corpus = f.readlines()
 
     # Build and train the model
-    model_artifacts = build_rag_difficulty_classifier(
+    model_artifacts = build_rag_difficulty_regressor(
         train_df,
         valid_df,
         knowledge_corpus,
-        model_name="microsoft/deberta-v3-base",
-        num_labels=3
+        model_name="microsoft/deberta-v3-base"
     )
 
     # Example prediction
