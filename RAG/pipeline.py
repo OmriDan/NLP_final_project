@@ -76,19 +76,21 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
     # Step 5: Set up training arguments with wandb integration
     training_args = TrainingArguments(
         output_dir="./results",
-        evaluation_strategy="epoch",
-        learning_rate=2e-5,
+        evaluation_strategy="steps",
+        eval_steps=100,
+        learning_rate=5e-5,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.1,
         per_device_train_batch_size=8,
-        per_device_eval_batch_size=8,
-        num_train_epochs=100,
+        per_device_eval_batch_size=16,
+        num_train_epochs=20,
         weight_decay=0.01,
-        push_to_hub=False,
         fp16=True,
-        lr_scheduler_type="linear",
-        # Add wandb reporting
+        load_best_model_at_end=True,
+        metric_for_best_model="mae",
+        greater_is_better=False,
         report_to="wandb",
-        logging_dir="./logs",
-        logging_steps=10
+        logging_steps=50
     )
 
     # Step 6: Define evaluation metrics for regression
