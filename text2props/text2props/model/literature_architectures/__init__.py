@@ -1,0 +1,3 @@
+from ._majority_wrongness import MajorityWrongnessText2PropsModel
+from ._majority_2pm_irt import Majority2pmIrtText2PropsModel
+from ._r2de import R2DEText2PropsModel

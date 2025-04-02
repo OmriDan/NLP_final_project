@@ -1,0 +1,39 @@
+# DATA PATH
+DATA_PATH = 'data/processed'
+RAW_DATA_PATH = 'data/raw'
+OUTPUT_DATA_PATH = 'outputs'
+MODELS_PATH = 'models'
+
+# HEADERS
+CORRECT_TEXTS = 'text_correct_choices'
+WRONG_TEXTS = 'text_wrong_choices'
+CORRECT = 'correct'
+ID_HEADER = 'id'
+LATENT_TRAIT = 'latent_trait'
+Q_ID = 'question_id'
+Q_TEXT = 'question_text'
+TIMESTAMP = 'timestamp'
+S_ID = 'student_id'
+
+# FILE COLUMNS
+ANSWERS_DF_COLS = [S_ID, TIMESTAMP, CORRECT, Q_ID]
+QUESTION_DF_COLS = [Q_ID, Q_TEXT, CORRECT_TEXTS, WRONG_TEXTS]  # CORRECT_TEXTS and WRONG_TEXTS are lists of texts
+QUESTION_LATENT_TRAITS_DF_COLS = [Q_ID, LATENT_TRAIT]
+
+# Name of latent traits
+DIFFICULTY = 'difficulty'
+DISCRIMINATION = 'discrimination'
+WRONGNESS = 'wrongness'
+DEFAULT_LT_NAME = 'default_latent_trait'
+
+# default values for latent traits
+DIFFICULTY_MIN = -5.0
+DIFFICULTY_MAX = 5.0
+DIFFICULTY_RANGE = (DIFFICULTY_MIN, DIFFICULTY_MAX)
+DEFAULT_DISCRIMINATION = 1.0
+DISCRIMINATION_COEFFICIENT = 1.7
+DISCRIMINATION_MIN = -1.0
+DISCRIMINATION_MAX = 2.5
+DISCRIMINATION_RANGE = (DISCRIMINATION_MIN, DISCRIMINATION_MAX)
+DEFAULT_GUESS = 0.0
+DEFAULT_SLIP = 0.0
