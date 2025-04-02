@@ -3,8 +3,12 @@ import torch
 import pickle
 import wandb
 from transformers import AutoTokenizer, AutoModel, TrainingArguments, Trainer
+from wandb.cli.cli import offline, online
+
 from dataset import RAGAugmentedDataset
 from model import RAGQuestionDifficultyRegressor
+from retriever import RAGRetriever
+
 from transformers.integrations import WandbCallback
 from transformers.trainer_callback import TrainerCallback
 from wandb_utils import log_prediction_examples
@@ -30,10 +34,23 @@ class CustomWandbCallback(TrainerCallback):
             wandb.run.summary["total_steps"] = state.global_step
 
 
-def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-base",
+def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-large",embedding_model_name="sentence-transformers/multi-qa-mpnet-base-dot-v1",
                                    wandb_project="rag-difficulty-regressor", wandb_run_name=None):
+    """
+    Build and train a RAG-based difficulty regressor with wandb integration.
+    Another encoder model option is neulab/codebert-base
+    Specifically pre-trained on code, Better understanding of programming concepts,
+     Would understand programming difficulty better than general-purpose models
+    :param train_df:
+    :param valid_df:
+    :param knowledge_corpus:
+    :param model_name:
+    :param wandb_project:
+    :param wandb_run_name:
+    :return:
+    """
     # Initialize wandb
-    wandb.init(project=wandb_project, name=wandb_run_name)
+    wandb.init(project=wandb_project, name=wandb_run_name, mode="online")
 
     # Log dataset info
     wandb.config.update({
@@ -44,8 +61,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
     })
 
     # Step 1: Prepare the RAG retriever with the knowledge corpus
-    from retriever import RAGRetriever
-    retriever = RAGRetriever(knowledge_corpus)
+    retriever = RAGRetriever(knowledge_corpus, embedding_model=embedding_model_name)
 
     # Step 2: Initialize tokenizer and base model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -58,7 +74,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         labels=train_df['difficulty'].tolist(),
         tokenizer=tokenizer,
         retriever=retriever,
-        k=3
+        k=5
     )
 
     valid_dataset = RAGAugmentedDataset(
@@ -67,7 +83,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         labels=valid_df['difficulty'].tolist(),
         tokenizer=tokenizer,
         retriever=retriever,
-        k=3
+        k=5
     )
 
     # Step 4: Initialize the regressor model
@@ -95,20 +111,34 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
 
     # Step 6: Define evaluation metrics for regression
     def compute_metrics(eval_preds):
-        scores, labels = eval_preds
+        # Handle the complex output structure from the model
+        predictions, labels = eval_preds
+
+        # Extract scores from predictions (which may be a tuple of nested arrays)
+        if isinstance(predictions, tuple) and len(predictions) > 0:
+            # If predictions is a tuple, extract the first element (likely scores)
+            scores = predictions[0].flatten()
+        else:
+            scores = predictions.flatten()
+
+        # Ensure labels are flattened too
+        labels = labels.flatten()
+
+        # Compute metrics
         mse = ((scores - labels) ** 2).mean().item()
         mae = abs(scores - labels).mean().item()
         rmse = mse ** 0.5
 
-        # Log a few example predictions to wandb
+        # Log to wandb
         if wandb.run is not None:
             wandb.log({"eval/mse": mse, "eval/mae": mae, "eval/rmse": rmse})
 
-            # Log some example predictions
+            # Log example predictions
             if len(scores) > 5:
                 example_table = wandb.Table(columns=["Predicted", "Actual", "Error"])
-                for i in range(5):  # Log first 5 examples
-                    example_table.add_data(scores[i], labels[i], abs(scores[i] - labels[i]))
+                for i in range(5):
+                    example_table.add_data(float(scores[i]), float(labels[i]),
+                                           float(abs(scores[i] - labels[i])))
                 wandb.log({"eval_examples": example_table})
 
         return {
@@ -140,14 +170,18 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         artifact.add_dir(model_dir)
         wandb.log_artifact(artifact)
 
-        # Log a sample prediction
         if len(valid_dataset) > 0:
             sample_inputs = valid_dataset[0]
             sample_inputs = {k: v.unsqueeze(0) for k, v in sample_inputs.items() if k != 'labels'}
             with torch.no_grad():
-                prediction = model(**sample_inputs)["score"].item()
+                prediction = model(**sample_inputs)
+                # Check if prediction is a tuple (loss, score) or just score
+                if isinstance(prediction, tuple):
+                    prediction = prediction[1].item()
+                else:
+                    prediction = prediction.item()
             wandb.log({"sample_prediction": prediction})
-            log_prediction_examples(model, dataset, tokenizer, num_examples=5)
+
     # Finish the wandb run
     wandb.finish()
 
