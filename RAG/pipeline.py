@@ -1,11 +1,48 @@
 import os
 import torch
 import pickle
+import wandb
 from transformers import AutoTokenizer, AutoModel, TrainingArguments, Trainer
 from dataset import RAGAugmentedDataset
 from model import RAGQuestionDifficultyRegressor
+from transformers.integrations import WandbCallback
+from transformers.trainer_callback import TrainerCallback
+from wandb_utils import log_prediction_examples
 
-def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-base"):
+class CustomWandbCallback(TrainerCallback):
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not state.is_world_process_zero:
+            return
+
+        # Log additional custom metrics
+        if wandb.run is not None and logs is not None:
+            # Add any custom metrics you want to track
+            wandb.log({
+                "custom/learning_rate": logs.get("learning_rate", 0),
+                "custom/epoch": logs.get("epoch", 0),
+                "custom/step": state.global_step
+            })
+
+    def on_train_end(self, args, state, control, **kwargs):
+        if wandb.run is not None:
+            # Log a summary of the training
+            wandb.run.summary["final_loss"] = state.log_history[-1].get("loss", 0)
+            wandb.run.summary["total_steps"] = state.global_step
+
+
+def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-base",
+                                   wandb_project="rag-difficulty-regressor", wandb_run_name=None):
+    # Initialize wandb
+    wandb.init(project=wandb_project, name=wandb_run_name)
+
+    # Log dataset info
+    wandb.config.update({
+        "train_samples": len(train_df),
+        "valid_samples": len(valid_df),
+        "model_name": model_name,
+        "knowledge_corpus_size": len(knowledge_corpus)
+    })
+
     # Step 1: Prepare the RAG retriever with the knowledge corpus
     from retriever import RAGRetriever
     retriever = RAGRetriever(knowledge_corpus)
@@ -36,7 +73,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
     # Step 4: Initialize the regressor model
     model = RAGQuestionDifficultyRegressor(base_model)
 
-    # Step 5: Set up training arguments
+    # Step 5: Set up training arguments with wandb integration
     training_args = TrainingArguments(
         output_dir="./results",
         evaluation_strategy="epoch",
@@ -48,6 +85,10 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         push_to_hub=False,
         fp16=True,
         lr_scheduler_type="linear",
+        # Add wandb reporting
+        report_to="wandb",
+        logging_dir="./logs",
+        logging_steps=10
     )
 
     # Step 6: Define evaluation metrics for regression
@@ -55,10 +96,23 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         scores, labels = eval_preds
         mse = ((scores - labels) ** 2).mean().item()
         mae = abs(scores - labels).mean().item()
+        rmse = mse ** 0.5
+
+        # Log a few example predictions to wandb
+        if wandb.run is not None:
+            wandb.log({"eval/mse": mse, "eval/mae": mae, "eval/rmse": rmse})
+
+            # Log some example predictions
+            if len(scores) > 5:
+                example_table = wandb.Table(columns=["Predicted", "Actual", "Error"])
+                for i in range(5):  # Log first 5 examples
+                    example_table.add_data(scores[i], labels[i], abs(scores[i] - labels[i]))
+                wandb.log({"eval_examples": example_table})
+
         return {
             "mse": mse,
             "mae": mae,
-            "rmse": mse ** 0.5
+            "rmse": rmse
         }
 
     # Step 7: Initialize trainer
@@ -68,10 +122,32 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
         compute_metrics=compute_metrics,
+        callbacks=[CustomWandbCallback(), WandbCallback()]
     )
 
     # Step 8: Train the model
     trainer.train()
+
+    # Log final model as an artifact
+    model_dir = "./final_model"
+    os.makedirs(model_dir, exist_ok=True)
+    trainer.save_model(model_dir)
+
+    if wandb.run is not None:
+        artifact = wandb.Artifact(name=f"model-{wandb.run.id}", type="model")
+        artifact.add_dir(model_dir)
+        wandb.log_artifact(artifact)
+
+        # Log a sample prediction
+        if len(valid_dataset) > 0:
+            sample_inputs = valid_dataset[0]
+            sample_inputs = {k: v.unsqueeze(0) for k, v in sample_inputs.items() if k != 'labels'}
+            with torch.no_grad():
+                prediction = model(**sample_inputs)["score"].item()
+            wandb.log({"sample_prediction": prediction})
+            log_prediction_examples(model, dataset, tokenizer, num_examples=5)
+    # Finish the wandb run
+    wandb.finish()
 
     # Step 9: Save the trained model, tokenizer, and retriever
     model_artifacts = {

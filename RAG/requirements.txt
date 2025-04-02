@@ -7,3 +7,4 @@ langchain_huggingface
 langchain_community
 datasets
 faiss-gpu
+wandb
