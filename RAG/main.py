@@ -83,4 +83,31 @@ def main():
     print(f"Predicted difficulty: {result['difficulty_score']}")
     print(f"Explanation: {result['explanation']}")
 
-# Rest of the code remains the same
+
+# Example inference-only usage
+def inference_demo():
+    """Demo function for inference with a trained model"""
+    try:
+        # Load saved model artifacts
+        import pickle
+        with open("difficulty_regressor_artifacts.pkl", "rb") as f:
+            model_artifacts = pickle.load(f)
+
+        # Example question and answer
+        question = "Given an array of integers, find two numbers such that they add up to a specific target."
+        answer = "Use a hash map to store values and check for target-num in the map."
+        # Predict difficulty
+        result = predict_difficulty_with_rag(question, answer, model_artifacts)
+
+        print(f"Question: {question}")
+        print(f"Answer: {answer}")
+        print(f"Difficulty Score: {result['difficulty_score']:.2f}")
+        print(f"Explanation: {result['explanation']}")
+
+    except FileNotFoundError:
+        print("Model artifacts not found. Please train the model first.")
+
+
+if __name__ == "__main__":
+    main()
+    inference_demo()
