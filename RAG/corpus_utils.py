@@ -24,7 +24,7 @@ def prepare_knowledge_corpus(file_path=None, dataset_name=None, split=None):
     # Load HuggingFace dataset if provided
     if dataset_name:
         # Load dataset from Hugging Face
-        hf_dataset = load_dataset(dataset_name, split=split or "train")
+        hf_dataset = load_dataset(dataset_name, split=split or "train", trust_remote_code=True)
 
         # Extract text from dataset (adjust field name as needed)
         text_field = next(field for field in hf_dataset.features
@@ -33,10 +33,21 @@ def prepare_knowledge_corpus(file_path=None, dataset_name=None, split=None):
 
         # Split long texts
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
+            # Increase chunk size for more complete code examples
+            chunk_size=2000,
+            chunk_overlap=300,
+            # Add code-specific separators to preserve structure
+            separators=[
+                # First try to split on major section breaks
+                "\n\n\n", "\n\n",
+                # Code-specific separators
+                "\nclass ", "\ndef ", "\nfunction ", "\n```", "\n#",
+                # Then by paragraphs/lines
+                "\n", " ", ""
+            ],
+            # Keep special tokens together
+            keep_separator=True
         )
-
         for item in hf_dataset:
             if text_field in item and item[text_field]:
                 chunks = text_splitter.split_text(item[text_field])
