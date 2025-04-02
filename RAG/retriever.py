@@ -4,7 +4,7 @@ from langchain.schema.document import Document
 from langchain_community.vectorstores import FAISS
 
 class RAGRetriever:
-    def __init__(self, documents, embedding_model="sentence-transformers/all-mpnet-base-v2"):
+    def __init__(self, documents, embedding_model):
         # Initialize HuggingFace embeddings through LangChain
         self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
 

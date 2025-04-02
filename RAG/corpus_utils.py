@@ -38,10 +38,12 @@ def prepare_knowledge_corpus(file_path=None, dataset_name=None, split=None):
             chunk_overlap=300,
             # Add code-specific separators to preserve structure
             separators=[
-                # First try to split on major section breaks
+                # Major section breaks
                 "\n\n\n", "\n\n",
                 # Code-specific separators
-                "\nclass ", "\ndef ", "\nfunction ", "\n```", "\n#",
+                "\nclass ", "\ndef ", "\nfunction ", "\nasync def ", "\n@",
+                "\nimport ", "\nfrom ", "\n```", "\n#", "\n//", "\n/*",
+                "\nif ", "\nfor ", "\nwhile ",
                 # Then by paragraphs/lines
                 "\n", " ", ""
             ],
