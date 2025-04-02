@@ -70,7 +70,8 @@ def main():
         train_df,
         valid_df,
         knowledge_corpus,
-        model_name="microsoft/deberta-v3-base",
+        model_name="microsoft/deberta-v3-large",
+        embedding_model_name=embedding_model_name,
         wandb_project=wandb_project,
         wandb_run_name=wandb_run_name
     )
