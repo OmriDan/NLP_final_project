@@ -33,7 +33,11 @@ def predict_difficulty_with_rag(question, answer, model_artifacts):
     with torch.no_grad():
         outputs = model(**inputs)
 
-    difficulty_score = outputs["score"][0].item()
+    # Handle different output types
+    if isinstance(outputs, tuple):
+        difficulty_score = outputs[1].item()  # Assuming the second output is the score
+    else:
+        difficulty_score = outputs.item()
 
     # Generate explanation that includes RAG context
     explanation = generate_rag_explanation(question, answer, retriever, difficulty_score)
