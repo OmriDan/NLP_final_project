@@ -94,13 +94,13 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         output_dir="./results",
         evaluation_strategy="steps",
         eval_steps=100,
-        learning_rate=2e-4,  # Increase from 5e-5 to help escape local minimum
+        learning_rate=2e-5,  # Increase from 5e-5 to help escape local minimum
         lr_scheduler_type="linear",  # Try linear instead of cosine
         warmup_ratio=0.2,  # Longer warmup period
         per_device_train_batch_size=8,  # Larger batch for more stable gradients
-        per_device_eval_batch_size=16,
-        num_train_epochs=30,  # Potentially train longer
-        weight_decay=0.001,  # Reduce from 0.01 to allow more flexibility
+        per_device_eval_batch_size=8,
+        num_train_epochs=100,  # Potentially train longer
+        weight_decay=0.01,
         fp16=True,
         load_best_model_at_end=True,
         metric_for_best_model="mse",
