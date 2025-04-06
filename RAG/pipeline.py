@@ -13,6 +13,27 @@ from transformers.integrations import WandbCallback
 from transformers.trainer_callback import TrainerCallback
 from wandb_utils import log_prediction_examples
 
+
+def setup_wandb_run_directory(project_name, run_name=None):
+    """Setup wandb run and create a custom directory for model artifacts"""
+    # Generate meaningful name if not provided
+    if run_name is None:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_name = f"difficulty_model_{timestamp}"
+
+    # Initialize wandb run
+    run = wandb.init(project=project_name, name=run_name, mode="online")
+
+    # Create directory structure based on run name
+    save_dir = os.path.join("models", run_name)
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Save directory path to wandb config
+    wandb.config.update({"save_dir": save_dir})
+
+    print(f"Model will be saved to: {save_dir}")
+    return run, save_dir
+
 class CustomWandbCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not state.is_world_process_zero:
@@ -33,6 +54,24 @@ class CustomWandbCallback(TrainerCallback):
             wandb.run.summary["final_loss"] = state.log_history[-1].get("loss", 0)
             wandb.run.summary["total_steps"] = state.global_step
 
+def compute_metrics(eval_preds):
+    # Handle the complex output structure from the model
+    predictions, labels = eval_preds
+
+    # Extract scores from predictions (which may be a tuple of nested arrays)
+    if isinstance(predictions, tuple) and len(predictions) > 0:
+        # If predictions is a tuple, extract the first element (likely scores)
+        scores = predictions[0].flatten()
+    else:
+        scores = predictions.flatten()
+
+    # Ensure labels are flattened too
+    labels = labels.flatten()
+
+    # Compute metrics
+    mse = ((scores - labels) ** 2).mean().item()
+    mae = abs(scores - labels).mean().item()
+    rmse = mse ** 0.5
 
 def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-large",embedding_model_name="sentence-transformers/multi-qa-mpnet-base-dot-v1",
                                    wandb_project="rag-difficulty-regressor", wandb_run_name=None):
