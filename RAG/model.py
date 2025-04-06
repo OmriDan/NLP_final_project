@@ -2,6 +2,26 @@ import torch
 import inspect
 
 
+class WeightedMSELoss(torch.nn.Module):
+    def __init__(self, low_weight=2.0, medium_weight=1.0, high_weight=2.0, medium_range=(0.3, 0.7)):
+        super().__init__()
+        self.low_weight = low_weight
+        self.medium_weight = medium_weight
+        self.high_weight = high_weight
+        self.medium_range = medium_range
+
+    def forward(self, pred, target):
+        # Determine weights based on target values
+        weights = torch.ones_like(target)
+        weights = torch.where(target < self.medium_range[0], self.low_weight * weights, weights)
+        weights = torch.where((target >= self.medium_range[0]) & (target <= self.medium_range[1]),
+                              self.medium_weight * weights, weights)
+        weights = torch.where(target > self.medium_range[1], self.high_weight * weights, weights)
+
+        # Calculate weighted MSE
+        loss = weights * ((pred - target) ** 2)
+        return loss.mean()
+
 class RAGQuestionDifficultyRegressor(torch.nn.Module):
     def __init__(self, encoder_model, dropout_rate=0.15):
         super().__init__()
