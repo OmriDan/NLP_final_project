@@ -33,15 +33,18 @@ def predict_difficulty_with_rag(question, answer, model_artifacts):
         outputs = model(**inputs)
 
     # Extract score from outputs
-    if isinstance(outputs, dict):
-        score = outputs["logits"].item()
+    if isinstance(outputs, tuple):
+        raw_score = outputs[1]  # Get the score which is the second element
     else:
-        score = outputs.item()
+        raw_score = outputs
 
-    # Return prediction result
+    # Convert to Python float
+    score = float(raw_score.item())
+
+    # Now use the Python float in your return statement
     return {
         "difficulty_score": score,
-        "explanation": f"Based on analysis of the question, answer, and retrieved context, the estimated difficulty is {score:.2f} out of 5."
+        "explanation": f"Based on analysis of the question, answer, and retrieved context, the estimated difficulty is {score:.2f} out of 1."
     }
 
 

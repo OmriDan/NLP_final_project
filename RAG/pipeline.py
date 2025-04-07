@@ -146,17 +146,17 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
 
     # Update training arguments to use the new output directory
     training_args = TrainingArguments(
-        output_dir=output_dir,  # Updated to use run-specific directory
-        # Other arguments remain the same...
+        output_dir=output_dir,
         evaluation_strategy="steps",
         eval_steps=100,
-        learning_rate=2e-5,
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.2,
+        learning_rate=5e-6,  # Reduced from 2e-5
+        max_grad_norm=2.0,  # Add gradient clipping
+        lr_scheduler_type="linear",  # Changed from cosine
+        warmup_ratio=0.01,  # Reduced warmup
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
-        num_train_epochs=100,
-        weight_decay=0.001,
+        num_train_epochs=30,  # Reduced from 100
+        weight_decay=0.01,  # Increased from 0.001
         fp16=True,
         load_best_model_at_end=True,
         metric_for_best_model="mse",

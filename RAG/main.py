@@ -32,13 +32,13 @@ def main():
     programming_datasets = [
         ("codeparrot/apps", "train[:2000]"),  # Programming problems
         ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
-        ("open-r1/verifiable-coding-problems-python-10k", "train[:1000]"),  # Python exercises
+        ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
         ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
     ]
 
     # Add CS knowledge and QA datasets
     cs_qa_datasets = [
-        ("squad", "train[:1000]"),  # General QA format
+        ("squad", "train[:4000]"),  # General QA format
         ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
         ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
     ]
@@ -84,18 +84,29 @@ def main():
     print(f"Explanation: {result['explanation']}")
 
 
-# Example inference-only usage
-def inference_demo():
+def inference_demo(model_dir=None):
     """Demo function for inference with a trained model"""
     try:
-        # Load saved model artifacts
+        # If model_dir is not specified, use most recent model
+        if model_dir is None:
+            model_dirs = sorted([d for d in os.listdir("models") if os.path.isdir(os.path.join("models", d))],
+                                key=lambda x: os.path.getmtime(os.path.join("models", x)),
+                                reverse=True)
+            if model_dirs:
+                model_dir = os.path.join("models", model_dirs[0])
+            else:
+                raise FileNotFoundError("No model directories found")
+
+        # Load artifacts from the specified directory
+        artifacts_path = os.path.join(model_dir, "difficulty_regressor_artifacts.pkl")
+
         import pickle
-        with open("difficulty_regressor_artifacts.pkl", "rb") as f:
+        with open(artifacts_path, "rb") as f:
             model_artifacts = pickle.load(f)
 
         # Example question and answer
-        question = "Given an array of integers, find two numbers such that they add up to a specific target."
-        answer = "Use a hash map to store values and check for target-num in the map."
+        question = "How to print 'hello'?"
+        answer = "print('hello')"
         # Predict difficulty
         result = predict_difficulty_with_rag(question, answer, model_artifacts)
 
@@ -105,8 +116,7 @@ def inference_demo():
         print(f"Explanation: {result['explanation']}")
 
     except FileNotFoundError:
-        print("Model artifacts not found. Please train the model first.")
-
+        print(f"Model artifacts not found. Please check the path: {model_dir}")
 
 if __name__ == "__main__":
     main()

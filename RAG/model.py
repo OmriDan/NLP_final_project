@@ -4,7 +4,7 @@ import inspect
 
 
 class RAGQuestionDifficultyRegressor(torch.nn.Module):
-    def __init__(self, encoder_model, dropout_rate=0.15):
+    def __init__(self, encoder_model, dropout_rate=0.3):
         super().__init__()
         self.encoder = encoder_model
         hidden_size = self.encoder.config.hidden_size
@@ -50,16 +50,17 @@ class RAGQuestionDifficultyRegressor(torch.nn.Module):
         score = self.regressor(pooled_output).squeeze(-1)
 
         loss = None
+        loss = torch.nn.MSELoss()
+
         if labels is not None:
             # Apply weighted MSE loss based on difficulty ranges
             weights = torch.ones_like(labels)
-            # Increase weight for low difficulty samples (0-0.3)
-            weights = torch.where(labels < 0.3, weights * 2.0, weights)
-            # Increase weight for high difficulty samples (0.7-1.0)
-            weights = torch.where(labels > 0.7, weights * 2.0, weights)
+            # More gentle weighting for low/high difficulty
+            weights = torch.where(labels < 0.3, weights * 1.5, weights)
+            weights = torch.where(labels > 0.7, weights * 1.5, weights)
 
             # Weighted MSE loss
-            loss = torch.mean(weights * (score - labels) ** 2)
+            loss = ((score - labels) ** 2).mean()
 
         # For compatibility with Trainer
         if loss is not None:
