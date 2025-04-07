@@ -8,44 +8,40 @@ def predict_difficulty_with_rag(question, answer, model_artifacts):
     tokenizer = model_artifacts["tokenizer"]
     retriever = model_artifacts["retriever"]
 
-    # Determine model's device
-    device = next(model.parameters()).device
+    # Retrieve context
+    retrieved_docs = retriever.retrieve(question, k=5)
+    context_text = " ".join([doc.page_content for doc in retrieved_docs])
 
-    # Retrieve relevant documents
-    retrieved_docs = retriever.retrieve(question, k=3)
-    context = " ".join([doc.page_content for doc in retrieved_docs])
+    # Combine text with a consistent format
+    combined_text = f"Question: {question} Answer: {answer} Context: {context_text}"
 
-    # Create augmented input
-    augmented_input = f"Context: {context} Question: {question} Answer: {answer}"
-
-    # Tokenize
+    # Apply truncation to match training
     inputs = tokenizer(
-        augmented_input,
+        combined_text,
         return_tensors="pt",
         truncation=True,
-        max_length=1024
+        max_length=512,  # Set a fixed max length
+        padding="max_length"
     )
 
     # Move inputs to the same device as model
+    device = next(model.parameters()).device
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
-    # Make prediction
+    # Run inference
     with torch.no_grad():
         outputs = model(**inputs)
 
-    # Handle different output types
-    if isinstance(outputs, tuple):
-        difficulty_score = outputs[1].item()  # Assuming the second output is the score
+    # Extract score from outputs
+    if isinstance(outputs, dict):
+        score = outputs["logits"].item()
     else:
-        difficulty_score = outputs.item()
+        score = outputs.item()
 
-    # Generate explanation that includes RAG context
-    explanation = generate_rag_explanation(question, answer, retriever, difficulty_score)
-
+    # Return prediction result
     return {
-        "difficulty_score": difficulty_score,
-        "explanation": explanation,
-        "context_used": context
+        "difficulty_score": score,
+        "explanation": f"Based on analysis of the question, answer, and retrieved context, the estimated difficulty is {score:.2f} out of 5."
     }
 
 
