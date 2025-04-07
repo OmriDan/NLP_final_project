@@ -74,40 +74,55 @@ def compute_metrics(eval_preds):
     mae = abs(scores - labels).mean().item()
     rmse = mse ** 0.5
 
-def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-large",embedding_model_name="sentence-transformers/multi-qa-mpnet-base-dot-v1",
+    # Log to wandb
+    if wandb.run is not None:
+        wandb.log({"eval/mse": mse, "eval/mae": mae, "eval/rmse": rmse})
+
+        # Log example predictions
+        if len(scores) > 5:
+            example_table = wandb.Table(columns=["Predicted", "Actual", "Error"])
+            for i in range(5):
+                example_table.add_data(float(scores[i]), float(labels[i]),
+                                       float(abs(scores[i] - labels[i])))
+            wandb.log({"eval_examples": example_table})
+
+    return {
+        "mse": mse,
+        "mae": mae,
+        "rmse": rmse
+    }
+
+
+def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_name="microsoft/deberta-v3-large",
+                                   embedding_model_name="sentence-transformers/multi-qa-mpnet-base-dot-v1",
                                    wandb_project="rag-difficulty-regressor", wandb_run_name=None):
-    """
-    Build and train a RAG-based difficulty regressor with wandb integration.
-    Another encoder model option is neulab/codebert-base
-    Specifically pre-trained on code, Better understanding of programming concepts,
-     Would understand programming difficulty better than general-purpose models
-    :param train_df:
-    :param valid_df:
-    :param knowledge_corpus:
-    :param model_name:
-    :param wandb_project:
-    :param wandb_run_name:
-    :return:
-    """
-    # Initialize wandb
-    wandb.init(project=wandb_project, name=wandb_run_name, mode="online")
+    """Build and train a RAG-based difficulty regressor with wandb integration."""
+    import datetime
+
+    # Initialize wandb and get model directory
+    run, model_dir = setup_wandb_run_directory(wandb_project, wandb_run_name)
+
+    # Configure output paths
+    output_dir = os.path.join(model_dir, "checkpoints")
+    final_model_dir = os.path.join(model_dir, "final_model")
+    artifacts_path = os.path.join(model_dir, "difficulty_regressor_artifacts.pkl")
 
     # Log dataset info
     wandb.config.update({
         "train_samples": len(train_df),
         "valid_samples": len(valid_df),
         "model_name": model_name,
-        "knowledge_corpus_size": len(knowledge_corpus)
+        "knowledge_corpus_size": len(knowledge_corpus),
+        "model_path": final_model_dir,
+        "artifacts_path": artifacts_path
     })
 
     # Step 1: Prepare the RAG retriever with the knowledge corpus
     retriever = RAGRetriever(knowledge_corpus, embedding_model=embedding_model_name)
-
-    # Step 2: Initialize tokenizer and base model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     base_model = AutoModel.from_pretrained(model_name)
 
-    # Step 3: Create RAG-augmented datasets
+    # Create datasets
     train_dataset = RAGAugmentedDataset(
         questions=train_df['question'].tolist(),
         answers=train_df['answer'].tolist(),
@@ -126,21 +141,22 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         k=5
     )
 
-    # Step 4: Initialize the regressor model
+    # Initialize model
     model = RAGQuestionDifficultyRegressor(base_model)
 
-    # Step 5: Set up training arguments with wandb integration
+    # Update training arguments to use the new output directory
     training_args = TrainingArguments(
-        output_dir="./results",
+        output_dir=output_dir,  # Updated to use run-specific directory
+        # Other arguments remain the same...
         evaluation_strategy="steps",
         eval_steps=100,
-        learning_rate=2e-5,  # Increase from 5e-5 to help escape local minimum
-        lr_scheduler_type="linear",  # Try linear instead of cosine
-        warmup_ratio=0.2,  # Longer warmup period
-        per_device_train_batch_size=8,  # Larger batch for more stable gradients
+        learning_rate=2e-5,
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.2,
+        per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
-        num_train_epochs=100,  # Potentially train longer
-        weight_decay=0.01,
+        num_train_epochs=100,
+        weight_decay=0.001,
         fp16=True,
         load_best_model_at_end=True,
         metric_for_best_model="mse",
@@ -149,45 +165,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         logging_steps=50
     )
 
-    # Step 6: Define evaluation metrics for regression
-    def compute_metrics(eval_preds):
-        # Handle the complex output structure from the model
-        predictions, labels = eval_preds
-
-        # Extract scores from predictions (which may be a tuple of nested arrays)
-        if isinstance(predictions, tuple) and len(predictions) > 0:
-            # If predictions is a tuple, extract the first element (likely scores)
-            scores = predictions[0].flatten()
-        else:
-            scores = predictions.flatten()
-
-        # Ensure labels are flattened too
-        labels = labels.flatten()
-
-        # Compute metrics
-        mse = ((scores - labels) ** 2).mean().item()
-        mae = abs(scores - labels).mean().item()
-        rmse = mse ** 0.5
-
-        # Log to wandb
-        if wandb.run is not None:
-            wandb.log({"eval/mse": mse, "eval/mae": mae, "eval/rmse": rmse})
-
-            # Log example predictions
-            if len(scores) > 5:
-                example_table = wandb.Table(columns=["Predicted", "Actual", "Error"])
-                for i in range(5):
-                    example_table.add_data(float(scores[i]), float(labels[i]),
-                                           float(abs(scores[i] - labels[i])))
-                wandb.log({"eval_examples": example_table})
-
-        return {
-            "mse": mse,
-            "mae": mae,
-            "rmse": rmse
-        }
-
-    # Step 7: Initialize trainer
+    # Initialize trainer
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -197,42 +175,34 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         callbacks=[CustomWandbCallback(), WandbCallback()]
     )
 
-    # Step 8: Train the model
+    # Train model
     trainer.train()
 
-    # Log final model as an artifact
-    model_dir = "./final_model"
-    os.makedirs(model_dir, exist_ok=True)
-    trainer.save_model(model_dir)
+    # Save model to the run-specific directory
+    os.makedirs(final_model_dir, exist_ok=True)
+    trainer.save_model(final_model_dir)
 
-    if wandb.run is not None:
-        artifact = wandb.Artifact(name=f"model-{wandb.run.id}", type="model")
-        artifact.add_dir(model_dir)
-        wandb.log_artifact(artifact)
+    # Log as wandb artifact
+    artifact = wandb.Artifact(name=f"model-{wandb.run.id}", type="model")
+    artifact.add_dir(final_model_dir)
+    wandb.log_artifact(artifact)
 
-        if len(valid_dataset) > 0:
-            sample_inputs = valid_dataset[0]
-            sample_inputs = {k: v.unsqueeze(0) for k, v in sample_inputs.items() if k != 'labels'}
-            with torch.no_grad():
-                prediction = model(**sample_inputs)
-                # Check if prediction is a tuple (loss, score) or just score
-                if isinstance(prediction, tuple):
-                    prediction = prediction[1].item()
-                else:
-                    prediction = prediction.item()
-            wandb.log({"sample_prediction": prediction})
-
-    # Finish the wandb run
-    wandb.finish()
-
-    # Step 9: Save the trained model, tokenizer, and retriever
+    # Save artifacts to the run-specific path
     model_artifacts = {
         "model": model,
         "tokenizer": tokenizer,
         "retriever": retriever
     }
 
-    with open("difficulty_regressor_artifacts.pkl", "wb") as f:
+    with open(artifacts_path, "wb") as f:
         pickle.dump(model_artifacts, f)
+
+    # Create a README file with run information
+    with open(os.path.join(model_dir, "README.md"), "w") as f:
+        f.write(f"# Model: {wandb_run_name or 'Unnamed Run'}\n\n")
+        f.write(f"* Run ID: {wandb.run.id}\n")
+        f.write(f"* Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"* Base model: {model_name}\n")
+        f.write(f"* Embedding model: {embedding_model_name}\n")
 
     return model_artifacts
