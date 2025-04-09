@@ -47,9 +47,53 @@ class RAGAugmentedDataset(Dataset):
     def __getitem__(self, idx):
         augmented_input = self.augmented_inputs[idx]
 
-        # Combine question, retrieved context, and answer
-        text = f"Context: {augmented_input['context']} Question: {augmented_input['question']} Answer: {augmented_input['answer']}"
+        # Step 1: First prioritize the question (most important)
+        question_text = f"Question: {augmented_input['question']}"
+        question_encoding = self.tokenizer(
+            question_text,
+            truncation=True,
+            max_length=self.max_length // 2,  # Allocate up to half for question
+            return_length=True
+        )
+        question_length = question_encoding["length"][0]
+        question_truncated = self.tokenizer.decode(
+            question_encoding["input_ids"],
+            skip_special_tokens=True
+        )
 
+        # Step 2: Then allocate space for answer
+        remaining_tokens = self.max_length - question_length - 2  # Account for separator
+        answer_text = f"Answer: {augmented_input['answer']}"
+        answer_encoding = self.tokenizer(
+            answer_text,
+            truncation=True,
+            max_length=remaining_tokens // 2,  # Allocate up to half of remaining for answer
+            return_length=True
+        )
+        answer_length = answer_encoding["length"][0]
+        answer_truncated = self.tokenizer.decode(
+            answer_encoding["input_ids"],
+            skip_special_tokens=True
+        )
+
+        # Step 3: Use any remaining tokens for context
+        remaining_tokens = self.max_length - question_length - answer_length - 3  # Account for separators
+        context_text = f"Context: {augmented_input['context']}"
+        context_encoding = self.tokenizer(
+            context_text,
+            truncation=True,
+            max_length=remaining_tokens,
+            return_length=True
+        )
+        context_truncated = self.tokenizer.decode(
+            context_encoding["input_ids"],
+            skip_special_tokens=True
+        )
+
+        # Step 4: Combine all components in final format
+        text = f"{context_truncated} {question_truncated} {answer_truncated}"
+
+        # Final encoding
         encoding = self.tokenizer(
             text,
             truncation=True,
