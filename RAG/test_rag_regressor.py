@@ -3,10 +3,54 @@ import torch
 import pandas as pd
 from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics import r2_score, mean_squared_error
+from datasets import load_dataset
 
 from retriever import RAGRetriever
 from model import RAGQuestionDifficultyRegressor
 from dataset import RAGAugmentedDataset
+
+
+def prepare_knowledge_corpus(dataset_name=None, split=None, file_path=None):
+    """
+    Prepare knowledge corpus from Hugging Face dataset or local file
+    """
+    corpus = []
+
+    if file_path and os.path.exists(file_path):
+        # Load from local file
+        with open(file_path, 'r', encoding='utf-8') as f:
+            corpus = [line.strip() for line in f if line.strip()]
+        print(f"Loaded {len(corpus)} documents from {file_path}")
+        return corpus
+
+    if dataset_name:
+        # Load from Hugging Face dataset
+        try:
+            dataset = load_dataset(dataset_name, split=split)
+
+            # Extract text based on dataset format
+            if dataset_name == "squad":
+                # For SQuAD dataset, use context paragraphs
+                for item in dataset:
+                    if 'context' in item and item['context']:
+                        corpus.append(item['context'])
+            else:
+                # Try common text fields for other datasets
+                text_fields = ['text', 'content', 'document', 'instruction', 'input', 'context']
+                for item in dataset:
+                    for field in text_fields:
+                        if field in item and item[field]:
+                            corpus.append(item[field])
+                            break
+
+            print(f"Loaded {len(corpus)} documents from {dataset_name} ({split})")
+            return corpus
+
+        except Exception as e:
+            print(f"Error loading dataset {dataset_name}: {e}")
+            return []
+
+    return corpus
 
 
 def load_knowledge_corpus(path_or_data):
@@ -129,21 +173,42 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="microsoft/deberta-v3-base",
                         help="HuggingFace model to use")
     parser.add_argument("--embedding_model", type=str,
-                        default="sentence-transformers/multi-qa-mpnet-base-dot-v1",
+                        default="BAAI/bge-large-en-v1.5",
                         help="Embedding model for retriever")
     parser.add_argument("--corpus_path", type=str, default=None,
-                        help="Path to knowledge corpus CSV file (with 'text' column)")
+                        help="Path to knowledge corpus file")
     parser.add_argument("--test_path", type=str, default=None,
                         help="Path to test data CSV (with question, answer, difficulty columns)")
     parser.add_argument("--k", type=int, default=5,
                         help="Number of documents to retrieve")
+    parser.add_argument("--hf_datasets", nargs='+', default=["squad:train[:1000]"],
+                        help="Hugging Face datasets in format 'name:split'. Example: squad:train[:1000]")
 
     args = parser.parse_args()
 
-    # Load knowledge corpus
+    # Build knowledge corpus
+    knowledge_corpus = []
+
+    # Add corpus from file if provided
     if args.corpus_path:
-        knowledge_corpus = load_knowledge_corpus(args.corpus_path)
-    else:
+        file_corpus = prepare_knowledge_corpus(file_path=args.corpus_path)
+        knowledge_corpus.extend(file_corpus)
+
+    # Add corpus from Hugging Face datasets
+    for dataset_spec in args.hf_datasets:
+        parts = dataset_spec.split(':')
+        if len(parts) != 2:
+            print(f"Invalid dataset specification: {dataset_spec}. Format should be 'name:split'")
+            continue
+
+        dataset_name, split = parts
+        print(f"Loading dataset: {dataset_name}, split: {split}")
+        dataset_corpus = prepare_knowledge_corpus(dataset_name=dataset_name, split=split)
+        knowledge_corpus.extend(dataset_corpus)
+
+    print(f"Total knowledge corpus documents: {len(knowledge_corpus)}")
+
+    if not knowledge_corpus:
         knowledge_corpus = None  # Will use default small corpus
 
     # Set up the regressor
