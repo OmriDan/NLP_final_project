@@ -30,17 +30,17 @@ def main():
 
     # Add programming-specific datasets
     programming_datasets = [
-        ("codeparrot/apps", "train[:2000]"),  # Programming problems
-        ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
-        ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
-        ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
+        # ("codeparrot/apps", "train[:2000]"),  # Programming problems
+        # ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
+        # ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
+        # ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
     ]
 
     # Add CS knowledge and QA datasets
     cs_qa_datasets = [
         ("squad", "train[:4000]"),  # General QA format
-        ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
-        ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
+        # ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
+        # ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
     ]
 
     # Combine all datasets

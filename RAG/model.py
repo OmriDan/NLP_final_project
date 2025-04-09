@@ -4,7 +4,7 @@ import inspect
 
 
 class RAGQuestionDifficultyRegressor(torch.nn.Module):
-    def __init__(self, encoder_model, dropout_rate=0.3):
+    def __init__(self, encoder_model, dropout_rate=0.4):
         super().__init__()
         self.encoder = encoder_model
         hidden_size = self.encoder.config.hidden_size
@@ -58,7 +58,7 @@ class RAGQuestionDifficultyRegressor(torch.nn.Module):
             weights = torch.where(labels < 0.3, weights * 1.5, weights)
             weights = torch.where(labels > 0.7, weights * 1.5, weights)
 
-            # MSE loss
+            # Weighted MSE loss
             loss = ((score - labels) ** 2).mean()
 
         # For compatibility with Trainer
