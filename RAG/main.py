@@ -30,17 +30,17 @@ def main():
 
     # Add programming-specific datasets
     programming_datasets = [
-        # ("codeparrot/apps", "train[:2000]"),  # Programming problems
-        # ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
-        # ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
-        # ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
+        ("codeparrot/apps", "train[:2000]"),  # Programming problems
+        ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
+        ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
+        ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
     ]
 
     # Add CS knowledge and QA datasets
     cs_qa_datasets = [
         ("squad", "train[:4000]"),  # General QA format
-        # ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
-        # ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
+        ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
+        ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
     ]
 
     # Combine all datasets
@@ -57,7 +57,7 @@ def main():
 
     print(f"Total knowledge corpus documents: {len(knowledge_corpus)}")
     embedding_model_name = "sentence-transformers/multi-qa-mpnet-base-dot-v1" # A good general-purpose embedding model for retrieval tasks
-    embedding_model_name = "BAAI/bge-small-en-v1.5" # Currently one of the highest-performing embedding models for retrieval tasks.
+    embedding_model_name = "BAAI/bge-large-en-v1.5" # Currently one of the highest-performing embedding models for retrieval tasks.
     # It provides better semantic understanding of technical content and
     # would likely improve your RAG system's ability to find relevant context for difficulty estimation
     """
@@ -70,7 +70,7 @@ def main():
         train_df,
         valid_df,
         knowledge_corpus,
-        model_name="microsoft/deberta-v3-small",
+        model_name="microsoft/deberta-v3-large",
         embedding_model_name=embedding_model_name,
         wandb_project=wandb_project,
         wandb_run_name=wandb_run_name

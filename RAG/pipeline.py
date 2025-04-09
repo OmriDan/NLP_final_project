@@ -5,6 +5,7 @@ import pickle
 import wandb
 from transformers import AutoTokenizer, AutoModel, TrainingArguments, Trainer
 from wandb.cli.cli import offline, online
+from sklearn.metrics import r2_score
 
 from dataset import RAGAugmentedDataset
 from model import RAGQuestionDifficultyRegressor
@@ -55,6 +56,20 @@ class CustomWandbCallback(TrainerCallback):
             wandb.run.summary["final_loss"] = state.log_history[-1].get("loss", 0)
             wandb.run.summary["total_steps"] = state.global_step
 
+
+
+class R2MonitorCallback(TrainerCallback):
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if metrics is not None and "eval_r2" in metrics:
+            # Log to console
+            print(f"Eval R2: {metrics['eval_r2']:.4f}")
+
+            # Update best R2 in summary
+            if wandb.run is not None:
+                if "best_r2" not in wandb.run.summary or metrics["eval_r2"] > wandb.run.summary["best_r2"]:
+                    wandb.run.summary["best_r2"] = metrics["eval_r2"]
+
+
 def compute_metrics(eval_preds):
     # Handle the complex output structure from the model
     predictions, labels = eval_preds
@@ -73,23 +88,30 @@ def compute_metrics(eval_preds):
     mse = ((scores - labels) ** 2).mean().item()
     mae = abs(scores - labels).mean().item()
     rmse = mse ** 0.5
+    r2 = r2_score(labels, scores)  # Add R2 score calculation
 
     # Log to wandb
     if wandb.run is not None:
-        wandb.log({"eval/mse": mse, "eval/mae": mae, "eval/rmse": rmse})
+        wandb.log({
+            "eval/mse": mse,
+            "eval/mae": mae,
+            "eval/rmse": rmse,
+            "eval/r2": r2  # Log R2 score
+        })
 
         # Log example predictions
         if len(scores) > 5:
             example_table = wandb.Table(columns=["Predicted", "Actual", "Error"])
             for i in range(5):
                 example_table.add_data(float(scores[i]), float(labels[i]),
-                                       float(abs(scores[i] - labels[i])))
+                                      float(abs(scores[i] - labels[i])))
             wandb.log({"eval_examples": example_table})
 
     return {
         "mse": mse,
         "mae": mae,
-        "rmse": rmse
+        "rmse": rmse,
+        "r2": r2  # Return R2 score in metrics
     }
 
 
@@ -176,7 +198,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         compute_metrics=compute_metrics,
         callbacks=[CustomWandbCallback(), WandbCallback()]
     )
-
+    trainer.add_callback(R2MonitorCallback())
     # Train model
     trainer.train()
 
