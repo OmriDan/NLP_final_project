@@ -57,7 +57,7 @@ def main():
 
     print(f"Total knowledge corpus documents: {len(knowledge_corpus)}")
     embedding_model_name = "sentence-transformers/multi-qa-mpnet-base-dot-v1" # A good general-purpose embedding model for retrieval tasks
-    embedding_model_name = "BAAI/bge-large-en-v1.5" # Currently one of the highest-performing embedding models for retrieval tasks.
+    embedding_model_name = "BAAI/bge-small-en-v1.5" # Currently one of the highest-performing embedding models for retrieval tasks.
     # It provides better semantic understanding of technical content and
     # would likely improve your RAG system's ability to find relevant context for difficulty estimation
     """
@@ -70,7 +70,7 @@ def main():
         train_df,
         valid_df,
         knowledge_corpus,
-        model_name="microsoft/deberta-v3-large",
+        model_name="microsoft/deberta-v3-small",
         embedding_model_name=embedding_model_name,
         wandb_project=wandb_project,
         wandb_run_name=wandb_run_name

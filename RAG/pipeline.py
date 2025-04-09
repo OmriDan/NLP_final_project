@@ -37,13 +37,13 @@ def setup_wandb_run_directory(project_name, run_name=None):
 
 class CustomWandbCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if not state.is_world_process_zero:
+        if not state.is_world_process_zero or logs is None or wandb.run is None:
             return
 
-        # Log additional custom metrics
-        if wandb.run is not None and logs is not None:
-            # Add any custom metrics you want to track
+        # Log training vs validation loss difference to track overfitting
+        if 'loss' in logs and 'eval_loss' in logs:
             wandb.log({
+                "overfitting/train_val_diff": logs['eval_loss'] - logs['loss'],
                 "custom/learning_rate": logs.get("learning_rate", 0),
                 "custom/epoch": logs.get("epoch", 0),
                 "custom/step": state.global_step
@@ -146,23 +146,25 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
 
     # Update training arguments to use the new output directory
     training_args = TrainingArguments(
+        gradient_accumulation_steps=2,
         output_dir=output_dir,
         evaluation_strategy="steps",
         eval_steps=100,
-        learning_rate=5e-6,  # Reduced from 2e-5
-        max_grad_norm=2.0,  # Add gradient clipping
+        learning_rate=3e-6,  # Reduced from 2e-5
+        max_grad_norm=1.0,  # Add gradient clipping
         lr_scheduler_type="linear",  # Changed from cosine
         warmup_ratio=0.01,  # Reduced warmup
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
-        num_train_epochs=30,  # Reduced from 100
-        weight_decay=0.01,  # Increased from 0.001
+        num_train_epochs=15,  # Reduced from 100
+        weight_decay=0.02,  # Increased from 0.001
         fp16=True,
         load_best_model_at_end=True,
         metric_for_best_model="mse",
         greater_is_better=False,
         report_to="wandb",
-        logging_steps=50
+        logging_steps=50,
+
     )
 
     # Initialize trainer
@@ -178,22 +180,39 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
     # Train model
     trainer.train()
 
-    # Save model to the run-specific directory
+    # Get the best metric value
+    best_metric_value = trainer.state.best_metric
+    best_mse = round(float(best_metric_value), 4) if best_metric_value is not None else 0.0
+
+    # Update model names to include the metric
+    metric_suffix = f"_mse{best_mse}"
+    final_model_dir = os.path.join(model_dir, f"final_model{metric_suffix}")
+    artifacts_path = os.path.join(model_dir, f"difficulty_regressor_artifacts{metric_suffix}.pkl")
+
+    # Create wandb directory for model
+    wandb_dir = os.path.join("wandb", wandb_run_name + metric_suffix)
+    os.makedirs(wandb_dir, exist_ok=True)
+    wandb_model_path = os.path.join(wandb_dir, f"model{metric_suffix}")
+
+    # Save model to all directories
     os.makedirs(final_model_dir, exist_ok=True)
     trainer.save_model(final_model_dir)
+    trainer.save_model(wandb_model_path)
 
-    # Log as wandb artifact
-    artifact = wandb.Artifact(name=f"model-{wandb.run.id}", type="model")
+    # Log as wandb artifact with metric in name
+    artifact = wandb.Artifact(name=f"model-mse{best_mse}-{wandb.run.id}", type="model")
     artifact.add_dir(final_model_dir)
     wandb.log_artifact(artifact)
 
-    # Save artifacts to the run-specific path
+    # Update model_artifacts to include best metric
     model_artifacts = {
         "model": model,
         "tokenizer": tokenizer,
-        "retriever": retriever
+        "retriever": retriever,
+        "best_mse": best_mse
     }
 
+    # Save artifacts
     with open(artifacts_path, "wb") as f:
         pickle.dump(model_artifacts, f)
 
