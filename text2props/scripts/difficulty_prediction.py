@@ -21,7 +21,19 @@ from text2props.modules.regression import RegressionModule
 from text2props.modules.regression.components import SklearnRegressionComponent
 from text2props.evaluation.latent_traits_estimation import compute_error_metrics_latent_traits_estimation_regression
 from text2props.modules.feature_engineering.components import IRFeaturesComponent
-from custom_vectorizers import Word2VecVectorizer, BERTVectorizer
+from custom_vectorizers import Word2VecVectorizer, BERTVectorizer, CodeBERTVectorizer
+
+
+def python_preprocessor(text):
+    """
+    Custom preprocessor to retain Python syntax. AKA - basically no preprocessing.
+    Args:
+        text: Input text
+
+    Returns:
+        Preprocessed text
+    """
+    return text.strip()
 
 
 SEED = 42
@@ -33,28 +45,28 @@ df_questions = parse_data.parse_data(f"../data/raw/{database_name}.csv", True, T
 df_train, df_test = train_test_split(df_questions, test_size=0.2, random_state=SEED)
 
 
-# # 2. Build the Pipeline for Difficulty Estimation Only - Vectorizer = TF-IDF
-# print("[INFO] Vectorizer = TF-IDF")
-# pipeline_difficulty = FeatureEngAndRegressionPipeline(
-#     FeatureEngineeringModule([
-#         IRFeaturesComponent(
-#             TfidfVectorizer(stop_words='english',
-#                             preprocessor=vectorizer_text_preprocessor,
-#                             min_df=0.02,
-#                             max_df=0.92),
-#             concatenate_correct=True,  # Include answer options, change this to False later and see what happens
-#             concatenate_wrong=False
-#         ),
-#         #LinguisticFeaturesComponent(),
-#         ReadabilityFeaturesComponent(),
-#     ]),
-#     RegressionModule([
-#         SklearnRegressionComponent(
-#             RFRegressor(n_estimators=100, max_depth=20, random_state=SEED),
-#             latent_trait_range=DIFFICULTY_RANGE
-#         )
-#     ])
-# )
+# 2. Build the Pipeline for Difficulty Estimation Only - Vectorizer = TF-IDF
+print("[INFO] Vectorizer = TF-IDF")
+pipeline_difficulty = FeatureEngAndRegressionPipeline(
+    FeatureEngineeringModule([
+        IRFeaturesComponent(
+            TfidfVectorizer(stop_words='english',
+                            preprocessor=python_preprocessor,  # Changed from vectorizer_text_preprocessor to python_preprocessor
+                            min_df=0.02,
+                            max_df=0.92),
+            concatenate_correct=True,  # Include answer options, change this to False later and see what happens
+            concatenate_wrong=False
+        ),
+        #LinguisticFeaturesComponent(),
+        #ReadabilityFeaturesComponent(),
+    ]),
+    RegressionModule([
+        SklearnRegressionComponent(
+            RFRegressor(n_estimators=100, max_depth=20, random_state=SEED),
+            latent_trait_range=DIFFICULTY_RANGE
+        )
+    ])
+)
 # # 2. Build the Pipeline for Difficulty Estimation Only - Vectorizer = word2vec
 # word2vec_vectorizer = Word2VecVectorizer(model_path="path_to_word2vec_model.bin")
 # print("[INFO] Vectorizer = Word2Vec")
@@ -76,26 +88,44 @@ df_train, df_test = train_test_split(df_questions, test_size=0.2, random_state=S
 #     ])
 # )
 # 2. Build the Pipeline for Difficulty Estimation Only - Vectorizer = BERT
-print("[INFO] Vectorizer = BERT")
-bert_vectorizer = BERTVectorizer(model_name="distilbert-base-uncased")
-pipeline_difficulty = FeatureEngAndRegressionPipeline(
-    FeatureEngineeringModule([
-        IRFeaturesComponent(
-            bert_vectorizer,
-            concatenate_correct=True,  # Include answer options, change this to False later and see what happens
-            concatenate_wrong=False
-        ),
-        #LinguisticFeaturesComponent(),
-        ReadabilityFeaturesComponent(),
-    ]),
-    RegressionModule([
-        SklearnRegressionComponent(
-            RFRegressor(n_estimators=100, max_depth=20, random_state=SEED),
-            latent_trait_range=DIFFICULTY_RANGE
-        )
-    ])
-)
-
+# print("[INFO] Vectorizer = BERT")
+# bert_vectorizer = BERTVectorizer(model_name="bert-base-uncased", preprocessor=python_preprocessor)
+# pipeline_difficulty = FeatureEngAndRegressionPipeline(
+#     FeatureEngineeringModule([
+#         IRFeaturesComponent(
+#             bert_vectorizer,
+#             concatenate_correct=True,  # Include answer options, change this to False later and see what happens
+#             concatenate_wrong=False
+#         ),
+#         #LinguisticFeaturesComponent(),
+#         #ReadabilityFeaturesComponent(),
+#     ]),
+#     RegressionModule([
+#         SklearnRegressionComponent(
+#             RFRegressor(n_estimators=100, max_depth=20, random_state=SEED),
+#             latent_trait_range=DIFFICULTY_RANGE
+#         )
+#     ])
+# )
+# print("[INFO] Vectorizer = CodeBERT")
+# codebert_vectorizer = CodeBERTVectorizer(model_name="microsoft/codebert-base", preprocessor=python_preprocessor)
+# pipeline_difficulty = FeatureEngAndRegressionPipeline(
+#     FeatureEngineeringModule([
+#         IRFeaturesComponent(
+#             codebert_vectorizer,
+#             concatenate_correct=True,  # Include answer options, change this to False later and see what happens
+#             concatenate_wrong=False
+#         ),
+#         #LinguisticFeaturesComponent(),
+#         #ReadabilityFeaturesComponent(),
+#     ]),
+#     RegressionModule([
+#         SklearnRegressionComponent(
+#             RFRegressor(n_estimators=100, max_depth=20, random_state=SEED),
+#             latent_trait_range=DIFFICULTY_RANGE
+#         )
+#     ])
+# )
 
 # 3. Create a Calibrator Using Lecturer-Provided Difficulty Ratings
 # Here we create a dictionary mapping question IDs to their known difficulty ratings from the training set.
@@ -125,14 +155,12 @@ with open(f"../data/processed/predicted_latent_traits_{suffix}.pickle", "wb") as
 print("[INFO] Predicted difficulty ratings saved.")
 
 # Load true and predicted latent traits
-dict_true_latent_traits = pickle.load(open(f'../data/processed/predicted_latent_traits_{suffix}.pickle', "rb"))
-dict_predicted_latent_traits = pickle.load(open(f'../data/processed/known_latent_traits_{suffix}.pickle', 'rb'))
-
+dict_predicted_latent_traits = pickle.load(open(f'../data/processed/predicted_latent_traits_{suffix}.pickle', "rb"))
+dict_true_latent_traits = pickle.load(open(f'../data/processed/known_latent_traits_{suffix}.pickle', 'rb'))
 
 # Extract true and predicted difficulties
-#true_difficulties = [dict_true_latent_traits[DIFFICULTY][q_id] for q_id in df_test[Q_ID].values]
-true_difficulties = [dict_true_latent_traits[q_id] for q_id in df_test[Q_ID].values]
-predicted_difficulties = [dict_predicted_latent_traits[DIFFICULTY][q_id] for q_id in df_test[Q_ID].values]
+true_difficulties = [dict_true_latent_traits[DIFFICULTY][q_id] for q_id in df_test[Q_ID].values]
+predicted_difficulties = [dict_predicted_latent_traits[q_id] for q_id in df_test[Q_ID].values]
 
 # Extract true difficulties from the training and test sets
 true_difficulties_train = df_train[DIFFICULTY].values

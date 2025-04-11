@@ -1,18 +1,20 @@
 from sklearn.base import TransformerMixin
 import numpy as np
 from gensim.models import KeyedVectors
-from transformers import BertTokenizer, BertModel
+from transformers import BertTokenizer, BertModel,AutoTokenizer, AutoModel
+import gensim.downloader as api
 import torch
 
 
 class BERTVectorizer(TransformerMixin):
-    def __init__(self, model_name="bert-base-uncased"):
+    def __init__(self, model_name="bert-base-uncased", preprocessor=None):
         """
         Custom vectorizer for BERT embeddings.
         :param model_name: Name of the pre-trained BERT model (from Hugging Face).
         """
         self.tokenizer = BertTokenizer.from_pretrained(model_name)
         self.model = BertModel.from_pretrained(model_name)
+        self.preprocessor = preprocessor
 
     def fit(self, X, y=None):
         # No fitting required for pre-trained embeddings
@@ -26,19 +28,54 @@ class BERTVectorizer(TransformerMixin):
         """
         embeddings = []
         for text in X:
+            if self.preprocessor:
+                text = self.preprocessor(text)
             inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
             outputs = self.model(**inputs)
             cls_embedding = outputs.last_hidden_state[:, 0, :].detach().numpy()  # CLS token embedding
             embeddings.append(cls_embedding)
         return np.vstack(embeddings)
+
+
+class CodeBERTVectorizer(TransformerMixin):
+    def __init__(self, model_name="microsoft/codebert-base", preprocessor=None):
+        """
+        Custom vectorizer for CodeBERT embeddings.
+        :param model_name: Name of the pre-trained CodeBERT model.
+        """
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name)
+        self.preprocessor = preprocessor
+
+    def fit(self, X, y=None):
+        # No fitting required for pre-trained embeddings
+        return self
+
+    def transform(self, X):
+        """
+        Transforms input text into CodeBERT embeddings.
+        :param X: List of text inputs.
+        :return: Numpy array of CodeBERT [CLS] token embeddings.
+        """
+        embeddings = []
+        for text in X:
+            if self.preprocessor:
+                text = self.preprocessor(text)
+            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
+            outputs = self.model(**inputs)
+            cls_embedding = outputs.last_hidden_state[:, 0, :].detach().numpy()  # CLS token embedding
+            embeddings.append(cls_embedding)
+        return np.vstack(embeddings)
+
     
 class Word2VecVectorizer(TransformerMixin):
-    def __init__(self, model_path):
+    def __init__(self, model_name="word2vec-google-news-300"):
         """
         Custom vectorizer for Word2Vec embeddings.
-        :param model_path: Path to the pre-trained Word2Vec model (in Gensim format).
+        :param model_name: Name of the pre-trained Word2Vec model (from Gensim's API).
         """
-        self.model = KeyedVectors.load_word2vec_format(model_path, binary=True)
+        print(f"[INFO] Loading Word2Vec model: {model_name}")
+        self.model = api.load(model_name)  # Automatically downloads and loads the model
 
     def fit(self, X, y=None):
         # No fitting required for pre-trained embeddings
