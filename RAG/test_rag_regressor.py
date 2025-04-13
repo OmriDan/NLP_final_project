@@ -53,20 +53,6 @@ def prepare_knowledge_corpus(dataset_name=None, split=None, file_path=None):
     return corpus
 
 
-def load_knowledge_corpus(path_or_data):
-    """
-    Load knowledge corpus from file or use provided data
-    """
-    if isinstance(path_or_data, str) and os.path.exists(path_or_data):
-        # Load from file - assumes CSV format with 'text' column
-        return pd.read_csv(path_or_data)['text'].tolist()
-    elif isinstance(path_or_data, list):
-        # Use provided list directly
-        return path_or_data
-    else:
-        raise ValueError("Please provide a valid path to corpus CSV or a list of text documents")
-
-
 def setup_rag_regressor(model_name="microsoft/deberta-v3-base",
                         embedding_model_name="sentence-transformers/multi-qa-mpnet-base-dot-v1",
                         knowledge_corpus=None):
@@ -181,8 +167,6 @@ if __name__ == "__main__":
                         help="Path to test data CSV (with question, answer, difficulty columns)")
     parser.add_argument("--k", type=int, default=5,
                         help="Number of documents to retrieve")
-    parser.add_argument("--hf_datasets", nargs='+', default=["squad:train[:1000]"],
-                        help="Hugging Face datasets in format 'name:split'. Example: squad:train[:1000]")
 
     args = parser.parse_args()
 
@@ -195,15 +179,31 @@ if __name__ == "__main__":
         knowledge_corpus.extend(file_corpus)
 
     # Add corpus from Hugging Face datasets
-    for dataset_spec in args.hf_datasets:
-        parts = dataset_spec.split(':')
-        if len(parts) != 2:
-            print(f"Invalid dataset specification: {dataset_spec}. Format should be 'name:split'")
-            continue
 
-        dataset_name, split = parts
-        print(f"Loading dataset: {dataset_name}, split: {split}")
-        dataset_corpus = prepare_knowledge_corpus(dataset_name=dataset_name, split=split)
+    # Add programming-specific datasets
+    programming_datasets = [
+        # ("codeparrot/apps", "train[:2000]"),  # Programming problems
+        # ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
+        # ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
+        # ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
+    ]
+
+    # Add CS knowledge and QA datasets
+    cs_qa_datasets = [
+        ("squad", "train[:4000]"),  # General QA format
+        # ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
+        # ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
+    ]
+
+    # Combine all datasets
+    hf_datasets = programming_datasets + cs_qa_datasets
+    # Load each dataset
+    for dataset_name, split in hf_datasets:
+        print(f"Loading dataset: {dataset_name}")
+        dataset_corpus = prepare_knowledge_corpus(
+            dataset_name=dataset_name,
+            split=split
+        )
         knowledge_corpus.extend(dataset_corpus)
 
     print(f"Total knowledge corpus documents: {len(knowledge_corpus)}")
