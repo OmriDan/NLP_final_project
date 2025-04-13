@@ -8,49 +8,7 @@ from datasets import load_dataset
 from retriever import RAGRetriever
 from model import RAGQuestionDifficultyRegressor
 from dataset import RAGAugmentedDataset
-
-
-def prepare_knowledge_corpus(dataset_name=None, split=None, file_path=None):
-    """
-    Prepare knowledge corpus from Hugging Face dataset or local file
-    """
-    corpus = []
-
-    if file_path and os.path.exists(file_path):
-        # Load from local file
-        with open(file_path, 'r', encoding='utf-8') as f:
-            corpus = [line.strip() for line in f if line.strip()]
-        print(f"Loaded {len(corpus)} documents from {file_path}")
-        return corpus
-
-    if dataset_name:
-        # Load from Hugging Face dataset
-        try:
-            dataset = load_dataset(dataset_name, split=split)
-
-            # Extract text based on dataset format
-            if dataset_name == "squad":
-                # For SQuAD dataset, use context paragraphs
-                for item in dataset:
-                    if 'context' in item and item['context']:
-                        corpus.append(item['context'])
-            else:
-                # Try common text fields for other datasets
-                text_fields = ['text', 'content', 'document', 'instruction', 'input', 'context']
-                for item in dataset:
-                    for field in text_fields:
-                        if field in item and item[field]:
-                            corpus.append(item[field])
-                            break
-
-            print(f"Loaded {len(corpus)} documents from {dataset_name} ({split})")
-            return corpus
-
-        except Exception as e:
-            print(f"Error loading dataset {dataset_name}: {e}")
-            return []
-
-    return corpus
+from corpus_utils import prepare_knowledge_corpus
 
 
 def setup_rag_regressor(model_name="microsoft/deberta-v3-base",
@@ -68,13 +26,15 @@ def setup_rag_regressor(model_name="microsoft/deberta-v3-base",
     # Initialize retriever with knowledge corpus
     if knowledge_corpus is None:
         # Default small corpus if none provided
-        knowledge_corpus = [
+        default_docs = [
             "Algorithms are step-by-step procedures for solving problems.",
             "Data structures are specialized formats for organizing and storing data.",
             "Time complexity measures how an algorithm's execution time grows with input size.",
             "Dynamic programming solves problems by breaking them down into simpler subproblems.",
             "Graph algorithms process relationships between pairs of objects."
         ]
+        from langchain.schema.document import Document
+        knowledge_corpus = [Document(page_content=doc) for doc in default_docs]
         print("Using default small knowledge corpus. For better results, provide a domain-specific corpus.")
 
     retriever = RAGRetriever(knowledge_corpus, embedding_model=embedding_model_name)
@@ -98,7 +58,7 @@ def predict_difficulties(questions, answers=None, model=None, tokenizer=None, re
     dataset = RAGAugmentedDataset(
         questions=questions,
         answers=answers,
-        labels=[0.0] * len(questions),  # Dummy labels
+        labels=None, # For prediction, labels are not needed
         tokenizer=tokenizer,
         retriever=retriever,
         k=k
@@ -106,13 +66,14 @@ def predict_difficulties(questions, answers=None, model=None, tokenizer=None, re
 
     # Set model to evaluation mode
     model.eval()
-
+    # Get the device of the model
+    device = next(model.parameters()).device
     results = []
     with torch.no_grad():
         for i in range(len(dataset)):
             inputs = dataset[i]
             # Convert to batch format
-            batch_inputs = {k: v.unsqueeze(0).to(model.device) if isinstance(v, torch.Tensor) else [v]
+            batch_inputs = {k: v.unsqueeze(0).to(device) if isinstance(v, torch.Tensor) else [v]
                             for k, v in inputs.items() if k != 'labels'}
 
             # Get prediction
@@ -156,7 +117,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Test RAG difficulty regressor with pretrained models")
-    parser.add_argument("--model", type=str, default="microsoft/deberta-v3-base",
+    parser.add_argument("--model", type=str, default="microsoft/deberta-v3-large",
                         help="HuggingFace model to use")
     parser.add_argument("--embedding_model", type=str,
                         default="BAAI/bge-large-en-v1.5",
@@ -170,7 +131,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Build knowledge corpus
+    # Build knowledge corpus using the imported function
     knowledge_corpus = []
 
     # Add corpus from file if provided
@@ -178,26 +139,26 @@ if __name__ == "__main__":
         file_corpus = prepare_knowledge_corpus(file_path=args.corpus_path)
         knowledge_corpus.extend(file_corpus)
 
-    # Add corpus from Hugging Face datasets
-
     # Add programming-specific datasets
     programming_datasets = [
-        # ("codeparrot/apps", "train[:2000]"),  # Programming problems
-        # ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
-        # ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
-        # ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
+        ("codeparrot/apps", "train[:2000]"),  # Programming problems
+        ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
+        ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
+        ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
     ]
 
     # Add CS knowledge and QA datasets
     cs_qa_datasets = [
+        ("Kaeyze/computer-science-synthetic-dataset", "train[:6000]"),  # CS-specific QA
         ("squad", "train[:4000]"),  # General QA format
-        # ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
-        # ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
+        ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
+        ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
     ]
 
     # Combine all datasets
     hf_datasets = programming_datasets + cs_qa_datasets
-    # Load each dataset
+
+    # Load each dataset using the imported function
     for dataset_name, split in hf_datasets:
         print(f"Loading dataset: {dataset_name}")
         dataset_corpus = prepare_knowledge_corpus(
@@ -220,15 +181,24 @@ if __name__ == "__main__":
 
     # Example questions to test
     test_questions = [
+        "Print Hello World in Python.",
         "Write a function to find the maximum subarray sum.",
         "Implement a function to check if a string is a palindrome.",
         "Create a function to find the nth Fibonacci number using dynamic programming.",
         "Implement a depth-first search algorithm for a graph."
     ]
+    # Example answers
+    test_answers = [
+        "print('Hello World')",
+        "def max_subarray_sum(arr): return max(sum(arr[i:j]) for i in range(len(arr)) for j in range(i+1, len(arr)+1))",
+        "def is_palindrome(s): return s == s[::-1]",
+        "def fibonacci(n): if n <= 1: return n; return fibonacci(n-1) + fibonacci(n-2)",
+        "def dfs(graph, start): visited = set(); stack = [start]; while stack: vertex = stack.pop(); if vertex not in visited: visited.add(vertex); stack.extend(set(graph[vertex]) - visited)"
+    ]
 
     # Run predictions on examples
     print("\nRunning predictions on example questions:")
-    results = predict_difficulties(test_questions, model=model, tokenizer=tokenizer, retriever=retriever, k=args.k)
+    results = predict_difficulties(test_questions, test_answers, model=model, tokenizer=tokenizer, retriever=retriever, k=args.k)
 
     # Print results
     for result in results:
