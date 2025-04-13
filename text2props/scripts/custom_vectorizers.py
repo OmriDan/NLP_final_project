@@ -7,14 +7,22 @@ import torch
 
 
 class BERTVectorizer(TransformerMixin):
-    def __init__(self, model_name="bert-base-uncased", preprocessor=None):
+    def __init__(self, model_name="bert-base-uncased", preprocessor=None, model_path=None):
         """
         Custom vectorizer for BERT embeddings.
         :param model_name: Name of the pre-trained BERT model (from Hugging Face).
         """
-        self.tokenizer = BertTokenizer.from_pretrained(model_name)
-        self.model = BertModel.from_pretrained(model_name)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if model_path:
+            print(f"[INFO] Loading fine-tuned BERT model from: {model_path}")
+            self.tokenizer = BertTokenizer.from_pretrained(model_path)
+            self.model = BertModel.from_pretrained(model_path)
+        else:
+            self.tokenizer = BertTokenizer.from_pretrained(model_name)
+            self.model = BertModel.from_pretrained(model_name)
         self.preprocessor = preprocessor
+        self.device = device
+        self.model.to(self.device)
 
     def fit(self, X, y=None):
         # No fitting required for pre-trained embeddings
@@ -28,24 +36,30 @@ class BERTVectorizer(TransformerMixin):
         """
         embeddings = []
         for text in X:
-            if self.preprocessor:
-                text = self.preprocessor(text)
-            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
-            outputs = self.model(**inputs)
-            cls_embedding = outputs.last_hidden_state[:, 0, :].detach().numpy()  # CLS token embedding
-            embeddings.append(cls_embedding)
+            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding="max_length", max_length=512).to(self.device)
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+            embeddings.append(outputs.last_hidden_state[:, 0, :].cpu().numpy())  # CLS token
         return np.vstack(embeddings)
 
 
 class CodeBERTVectorizer(TransformerMixin):
-    def __init__(self, model_name="microsoft/codebert-base", preprocessor=None):
+    def __init__(self, model_name="microsoft/codebert-base", preprocessor=None, model_path=None):
         """
         Custom vectorizer for CodeBERT embeddings.
         :param model_name: Name of the pre-trained CodeBERT model.
         """
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if model_path:
+            print(f"[INFO] Loading fine-tuned CodeBERT model from: {model_path}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+            self.model = AutoModel.from_pretrained(model_path)
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModel.from_pretrained(model_name)
         self.preprocessor = preprocessor
+        self.device = device
+        self.model.to(self.device)
 
     def fit(self, X, y=None):
         # No fitting required for pre-trained embeddings
@@ -61,10 +75,10 @@ class CodeBERTVectorizer(TransformerMixin):
         for text in X:
             if self.preprocessor:
                 text = self.preprocessor(text)
-            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
-            outputs = self.model(**inputs)
-            cls_embedding = outputs.last_hidden_state[:, 0, :].detach().numpy()  # CLS token embedding
-            embeddings.append(cls_embedding)
+            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512).to(self.device)
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+            embeddings.append(outputs.last_hidden_state[:, 0, :].cpu().numpy())  # CLS token
         return np.vstack(embeddings)
 
     

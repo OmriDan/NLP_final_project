@@ -37,9 +37,9 @@ def python_preprocessor(text):
 
 
 SEED = 42
-database_name = "merged_leetcode_df"
-suffix = "leetcode"
-df_questions = parse_data.parse_data(f"../data/raw/{database_name}.csv", True, True, f"../data/processed/known_latent_traits_{suffix}.pickle")
+database_name = "DS_tests_with_difficulty"
+suffix = "DS-test"
+df_questions = parse_data.parse_data(f"../data/raw/{database_name}.csv", False, True, f"../data/processed/known_latent_traits_{suffix}.pickle")
 
 # Split into training and testing sets
 df_train, df_test = train_test_split(df_questions, test_size=0.2, random_state=SEED)
@@ -51,7 +51,7 @@ pipeline_difficulty = FeatureEngAndRegressionPipeline(
     FeatureEngineeringModule([
         IRFeaturesComponent(
             TfidfVectorizer(stop_words='english',
-                            preprocessor=python_preprocessor,  # Changed from vectorizer_text_preprocessor to python_preprocessor
+                            preprocessor=vectorizer_text_preprocessor,  # Changed from vectorizer_text_preprocessor to python_preprocessor
                             min_df=0.02,
                             max_df=0.92),
             concatenate_correct=True,  # Include answer options, change this to False later and see what happens

@@ -8,9 +8,10 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error
+from evaluation import compute_error_metrics
 
 
-def run_regression(filename: str) -> None:
+def run_regression(filename: str, model_name: str) -> None:
     # dataset - Change the csv name to point to the correct data
     data = pd.read_csv(filename)
 
@@ -35,7 +36,7 @@ def run_regression(filename: str) -> None:
         },  # DT
         {
             'regressor__fit_intercept': [True, False]
-        },  # LR (Note: 'normalize' is deprecated in newer versions of sklearn)
+        },  # LR
         {
             'regressor__kernel': ['linear', 'poly', 'rbf'],
             'regressor__gamma': ['auto', 'scale'],
@@ -73,12 +74,16 @@ def run_regression(filename: str) -> None:
     final_model = best_models[best_model_name]
 
     print(f"Best overall model: {best_model_name}")
+    y_test_pred = final_model.predict(X_test)
 
-    # Predict difficulty for new loss values
-    new_loss = np.array([[0.35], [0.65]])
-    predicted_difficulty = final_model.predict(new_loss)
-    print("Predicted difficulty scores:", predicted_difficulty)
+    metrics = compute_error_metrics(y_test.tolist(), y_test_pred.tolist())
+    for metric_name, metric_value in metrics.items():
+        print(f"{metric_name}: {metric_value:.4f}")
+
+    metrics_df = pd.DataFrame([metrics])
+    metrics_df.to_csv(f"metrics_{model_name}.csv", index=False)
 
 
 if __name__ == "__main__":
-    run_regression()
+    #run_regression("qa_loss.csv", "Flan-T5")
+    run_regression("qa_loss_qwen.csv", "Qwen1.5-0.5B-Chat")

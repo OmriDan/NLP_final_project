@@ -1,5 +1,4 @@
 import pyximport
-
 pyximport.install(language_level=3)
 import parse_data
 import pandas as pd
@@ -8,6 +7,9 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor as RFRegressor
 from sklearn.feature_extraction.text import TfidfVectorizer
+import torch
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"Using device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
 
 # Import text2props modules
 from text2props.constants import DATA_PATH, DIFFICULTY, DIFFICULTY_RANGE, Q_ID
@@ -36,10 +38,10 @@ def python_preprocessor(text):
 
 # Set random seed and file suffix
 SEED = 42
-suffix = "leetcode"
+suffix = "DS"
 
 # Load data and split
-df_questions = parse_data.parse_data(f"../data/raw/merged_leetcode_df.csv", True, True,
+df_questions = parse_data.parse_data(f"../data/raw/DS_tests_with_difficulty.csv", False, True,
                                      f"../data/processed/known_latent_traits_{suffix}.pickle")
 df_train, df_test = train_test_split(df_questions, test_size=0.2, random_state=SEED)
 
@@ -56,7 +58,7 @@ for use_readability in [True, False]:
     experiments.append({
         "vectorizer": "tfidf",
         "use_readability": use_readability,
-        "use_python_preproc": True  # not really used; we always use python_preprocessor for tfidf in this experiment
+        "use_python_preproc": False
     })
 
 # Word2Vec experiment: similar treatment.
@@ -64,32 +66,72 @@ for use_readability in [True, False]:
     experiments.append({
         "vectorizer": "word2vec",
         "use_readability": use_readability,
-        "use_python_preproc": True  # assuming Word2VecVectorizer is always instantiated with python_preprocessor
+        "use_python_preproc": False 
     })
+
+fine_tuned_bert_path = "../models/bert-base-uncased_fine_tuned"
+fine_tuned_codebert_path = "../models/microsoft_codebert-base_fine_tuned"
 
 # BERT experiments: with and without python_preprocessor, and readability on/off.
 for use_preproc in [True, False]:
     for use_readability in [True, False]:
+        # Non-fine-tuned BERT
         experiments.append({
             "vectorizer": "bert",
             "use_readability": use_readability,
-            "use_python_preproc": use_preproc
+            "use_python_preproc": False,
+            "model_path": None  # Non-fine-tuned model
         })
+        # Comment the following lines for DS experiments
+        # # Fine-tuned BERT
+        # experiments.append({
+        #     "vectorizer": "bert",
+        #     "use_readability": use_readability,
+        #     "use_python_preproc": use_preproc,
+        #     "model_path": fine_tuned_bert_path  # Fine-tuned model
+        # })
 
 # CodeBERT experiments: with and without python_preprocessor, and readability on/off.
 for use_preproc in [True, False]:
     for use_readability in [True, False]:
+        # Non-fine-tuned CodeBERT
         experiments.append({
             "vectorizer": "codebert",
             "use_readability": use_readability,
-            "use_python_preproc": use_preproc
+            "use_python_preproc": False,
+            "model_path": None  # Non-fine-tuned model
         })
+        # Comment the following lines for DS experiments
+        # # Fine-tuned CodeBERT
+        # experiments.append({
+        #     "vectorizer": "codebert",
+        #     "use_readability": use_readability,
+        #     "use_python_preproc": use_preproc,
+        #     "model_path": fine_tuned_codebert_path  # Fine-tuned model
+        # })
 
 # Loop over all experiments
 for exp in experiments:
     vectorizer_type = exp["vectorizer"]
     use_readability = exp["use_readability"]
     use_python_preproc = exp["use_python_preproc"]
+    model_path = exp.get("model_path", None)  
+
+    # Set up the vectorizer instance
+    if vectorizer_type == "bert":
+        chosen_preproc = python_preprocessor if use_python_preproc else vectorizer_text_preprocessor
+        vectorizer_instance = BERTVectorizer(
+            model_name="bert-base-uncased",
+            preprocessor=chosen_preproc,
+            model_path=model_path  # Pass model_path to load fine-tuned or pre-trained model
+        )
+    elif vectorizer_type == "codebert":
+        chosen_preproc = python_preprocessor if use_python_preproc else vectorizer_text_preprocessor
+        vectorizer_instance = CodeBERTVectorizer(
+            model_name="microsoft/codebert-base",
+            preprocessor=chosen_preproc,
+            model_path=model_path  # Pass model_path to load fine-tuned or pre-trained model
+        )
 
     # Create a name string for the experiment to use in saving files.
     exp_name = vectorizer_type
@@ -100,13 +142,18 @@ for exp in experiments:
     else:
         exp_name += "_no_readability"
 
+    # Add a suffix to indicate fine-tuned models
+    if model_path:
+        exp_name += "_finetuned"
+
     print(f"[INFO] Running experiment: {exp_name}")
+    print(f"[INFO] Using model path: {model_path if model_path else 'pre-trained model'}")
 
     # Set up the vectorizer instance
     if vectorizer_type == "tfidf":
         vectorizer_instance = TfidfVectorizer(
             stop_words='english',
-            preprocessor=python_preprocessor,  # fixed preprocessor for tfidf
+            preprocessor=vectorizer_text_preprocessor,  # fixed preprocessor for tfidf
             min_df=0.02,
             max_df=0.92
         )
