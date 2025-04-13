@@ -22,6 +22,33 @@ class RAGAugmentedDataset(Dataset):
 
     def _create_augmented_inputs(self):
         augmented_inputs = []
+        # Add few-shot examples - these provide calibration points for the model
+        examples = [
+            {"q": "Print 'Hello World'",
+             "a": "print('Hello World')",
+             "diff": 0.1,
+             "reason": "Very basic syntax with no algorithmic complexity"},
+
+            {"q": "Write a function to check if a string is a palindrome",
+             "a": "def is_palindrome(s): return s == s[::-1]",
+             "diff": 0.3,
+             "reason": "Simple algorithm using basic string operations"},
+
+            {"q": "Implement binary search on a sorted array",
+             "a": "def binary_search(arr, target):\n    left, right = 0, len(arr) - 1\n    while left <= right:\n        mid = (left + right) // 2\n        if arr[mid] == target: return mid\n        elif arr[mid] < target: left = mid + 1\n        else: right = mid - 1\n    return -1",
+             "diff": 0.6,
+             "reason": "Medium difficulty with divide-and-conquer approach"},
+
+            {"q": "Implement a balanced binary search tree with insertion and deletion",
+             "a": "class TreeNode:\n    def __init__(self, key):\n        self.left = None\n        self.right = None\n        self.val = key\n\nclass BST:\n    def insert(self, root, key):\n        if root is None:\n            return TreeNode(key)\n        else:\n            if root.val < key:\n                root.right = self.insert(root.right, key)\n            else:\n                root.left = self.insert(root.left, key)\n        return root",
+             "diff": 0.9,
+             "reason": "Complex data structure requiring careful balance maintenance"}
+        ]
+
+        # Create example demonstrations text
+        examples_text = "Example difficulty ratings:\n"
+        for ex in examples:
+            examples_text += f"Question: {ex['q']}\nSolution: {ex['a']}\nDifficulty: {ex['diff']} - {ex['reason']}\n\n"
 
         for question, answer in zip(self.questions, self.answers):
             # Retrieve relevant documents
@@ -29,12 +56,20 @@ class RAGAugmentedDataset(Dataset):
 
             # Extract context from retrieved documents
             context = " ".join([doc.page_content for doc in retrieved_docs])
-
+            # Add structured prompt
+            task_prompt = (
+                "Rate the difficulty of the following programming question on a scale from 0.0 (very easy) to 1.0 (very difficult). "
+                "Consider these factors: algorithm complexity, time/space efficiency, code length, required knowledge, "
+                "and implementation challenges. "
+                "Easy problems (0.0-0.3) typically use basic syntax and simple operations. "
+                "Medium problems (0.3-0.7) require data structures, loops, or standard algorithms. "
+                "Hard problems (0.7-1.0) requires expertise, involve complex algorithms, optimizations, or advanced concepts."
+            )
             # Create augmented input
             augmented_input = {
                 "question": question,
                 "answer": answer,
-                "context": context
+                "context": f"{task_prompt}\n\n{examples_text}\nRelevant Information:\n{context}"
             }
 
             augmented_inputs.append(augmented_input)

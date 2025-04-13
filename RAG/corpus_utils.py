@@ -71,7 +71,54 @@ def prepare_knowledge_corpus(file_path=None, dataset_name=None, split=None):
                         documents.append(doc)
 
             # Handle other datasets...
-            # (keeping the existing implementations for other datasets)
+            else:
+                # Generic handling for other datasets
+                candidate_fields = [
+                    # Question and content fields
+                    'problem', 'question', 'answer', 'solution', 'gold_standard_solution',
+                    'title', 'body', 'text', 'content', 'document', 'instruction', 'input', 'context',
+                    # Difficulty-related fields
+                    'difficulty', 'difficulty_level', 'complexity', 'level', 'rating',
+                    'score', 'grade_level', 'challenge_rating', 'hard_level', 'skill_level',
+                    # Context fields that might describe difficulty
+                    'difficulty_description', 'complexity_explanation', 'difficulty_justification',
+                    # Additional fields seen in the datasets
+                    'output'
+                ]
+
+                for item in hf_dataset:
+                    # Filter to fields that actually exist in the item
+                    available_fields = [f for f in candidate_fields if f in item and item[f] is not None]
+
+                    if available_fields:
+                        # Find fields with string content
+                        text_fields = [f for f in available_fields if isinstance(item[f], str) and len(item[f]) > 10]
+
+                        if text_fields:
+                            # Use the longest text field
+                            longest_field = max(text_fields, key=lambda f: len(item[f]))
+                            content = item[longest_field]
+
+                            # Add difficulty info if available
+                            difficulty_info = ""
+                            for field in ['difficulty', 'difficulty_level', 'complexity', 'level', 'rating']:
+                                if field in item and item[field] is not None:
+                                    difficulty_info = f"Difficulty: {item[field]}. "
+                                    break
+
+                            # Combine difficulty with content
+                            full_content = difficulty_info + content
+
+                            chunks = text_splitter.split_text(full_content)
+                            for chunk in chunks:
+                                doc = Document(
+                                    page_content=chunk,
+                                    metadata={
+                                        "source": dataset_name,
+                                        "difficulty": item.get("difficulty", "")
+                                    }
+                                )
+                                documents.append(doc)
 
             print(f"Loaded {len(documents)} documents from {dataset_name}")
 
