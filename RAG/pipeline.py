@@ -57,18 +57,40 @@ class CustomWandbCallback(TrainerCallback):
             wandb.run.summary["total_steps"] = state.global_step
 
 
-
 class R2MonitorCallback(TrainerCallback):
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        if metrics is not None and "eval_r2" in metrics:
-            # Log to console
-            print(f"Eval R2: {metrics['eval_r2']:.4f}")
+        if metrics is None or "eval_r2" not in metrics:
+            return control
 
-            # Update best R2 in summary
-            if wandb.run is not None:
-                if "best_r2" not in wandb.run.summary or metrics["eval_r2"] > wandb.run.summary["best_r2"]:
-                    wandb.run.summary["best_r2"] = metrics["eval_r2"]
+        # Log to console
+        print(f"Eval R2: {metrics['eval_r2']:.4f}")
 
+        # Update best R2 in summary
+        if wandb.run is not None:
+            try:
+                # Safely check and update best R2
+                current_r2 = metrics["eval_r2"]
+                best_r2 = None
+
+                try:
+                    # Use .get() method with default instead of direct access
+                    best_r2 = wandb.run.summary.get("best_r2", -float('inf'))
+                except Exception as e:
+                    print(f"Warning: Could not access best_r2 in wandb summary: {e}")
+                    best_r2 = -float('inf')
+
+                if best_r2 is None or current_r2 > best_r2:
+                    try:
+                        # Set summary value
+                        wandb.run.summary["best_r2"] = current_r2
+                        print(f"New best R2: {current_r2:.4f}")
+                    except Exception as e:
+                        print(f"Warning: Could not update best_r2 in wandb summary: {e}")
+
+            except Exception as e:
+                print(f"Error in R2 monitoring: {e}")
+
+        return control
 
 def compute_metrics(eval_preds):
     # Handle the complex output structure from the model
