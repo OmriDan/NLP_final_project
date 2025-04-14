@@ -204,7 +204,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         weight_decay=0.02,  # Increased from 0.001
         fp16=True,
         load_best_model_at_end=True,
-        metric_for_best_model="mse",
+        metric_for_best_model="mae",
         greater_is_better=False,
         report_to="wandb",
         logging_steps=50,
