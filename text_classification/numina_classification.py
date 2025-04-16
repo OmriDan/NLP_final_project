@@ -8,14 +8,53 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 import seaborn as sns
+from transformers.trainer_callback import EarlyStoppingCallback
+from RAG.retriever import RAGRetriever
+from RAG.corpus_utils import prepare_knowledge_corpus
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+
+
+class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
+    def __init__(self, problems, solutions, labels, tokenizer, retriever, k=5):
+        self.problems = problems
+        self.solutions = solutions
+        self.labels = labels
+        self.tokenizer = tokenizer
+        self.retriever = retriever
+        self.k = k
+
+    def __len__(self):
+        return len(self.problems)
+
+    def __getitem__(self, idx):
+        problem = self.problems[idx]
+        solution = self.solutions[idx]
+
+        # Retrieve relevant context
+        query = f"{problem} {solution}"
+        retrieved_docs = self.retriever.retrieve(query, k=self.k)
+        context = " ".join([doc.page_content for doc in retrieved_docs])
+
+        # Format input with context, problem, and solution
+        text = f"Context: {context} Problem: {problem} Solution: {solution}"
+
+        # Tokenize
+        encodings = self.tokenizer(text, truncation=True, padding="max_length",
+                                   max_length=512, return_tensors="pt")
+
+        # Convert to appropriate format
+        item = {key: val.squeeze(0) for key, val in encodings.items()}
+        item["labels"] = torch.tensor(self.labels[idx])
+
+        return item
 
 # Load the dataset from Hugging Face
 print("Loading dataset...")
 novadata = load_dataset("NovaSky-AI/labeled_numina_difficulty_859K")
 # Define the number of samples you want
-N = 30000  # Your desired sample size
+N = 50000  # Your desired sample size
 total_size = len(novadata["train"])
 sample_percentage = N / total_size
 
@@ -99,21 +138,47 @@ def preprocess_function(examples, tokenizer):
     return tokenized
 
 
-def train_and_evaluate_model(model_name, dataset):
-    """Train and evaluate a classification model"""
+def train_and_evaluate_model(model_name, dataset, knowledge_corpus=None):
+    """Train and evaluate a classification model with RAG if knowledge_corpus is provided"""
     print(f"\n===== Training model: {model_name} =====")
 
-    # Load tokenizer for the specific model
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # Tokenize and prepare the dataset - process each split separately
-    tokenized_dataset = {}
-    for split_name, split_data in dataset.items():
-        tokenized_dataset[split_name] = split_data.map(
-            lambda examples: preprocess_function(examples, tokenizer),
-            batched=True,
-            remove_columns=split_data.column_names
+    if knowledge_corpus:
+        # Using RAG approach
+        print("Using RAG augmentation...")
+        retriever = RAGRetriever(knowledge_corpus, embedding_model="BAAI/bge-large-en-v1.5")
+
+        # Create RAG-augmented datasets
+        train_dataset = RAGAugmentedClassificationDataset(
+            problems=dataset["train"]["problem"],
+            solutions=dataset["train"]["solution"],
+            labels=[int(round(float(d))) - 1 for d in dataset["train"]["gpt_difficulty_parsed"]],
+            tokenizer=tokenizer,
+            retriever=retriever,
+            k=3  # Number of documents to retrieve
         )
+
+        val_dataset = RAGAugmentedClassificationDataset(
+            problems=dataset["validation"]["problem"],
+            solutions=dataset["validation"]["solution"],
+            labels=[int(round(float(d))) - 1 for d in dataset["validation"]["gpt_difficulty_parsed"]],
+            tokenizer=tokenizer,
+            retriever=retriever,
+            k=3
+        )
+    else:
+        # Original approach (without RAG)
+        tokenized_dataset = {}
+        for split_name, split_data in dataset.items():
+            tokenized_dataset[split_name] = split_data.map(
+                lambda examples: preprocess_function(examples, tokenizer),
+                batched=True,
+                remove_columns=split_data.column_names
+            )
+        train_dataset = tokenized_dataset["train"]
+        val_dataset = tokenized_dataset["validation"]
 
     # Create model for classification (10 classes)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -129,25 +194,26 @@ def train_and_evaluate_model(model_name, dataset):
         learning_rate=2e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
-        num_train_epochs=3,
+        num_train_epochs=6,
         weight_decay=0.01,
         evaluation_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="f1_macro",
         greater_is_better=True,
-        report_to="none",
+        report_to="wandb",
     )
 
     # Initialize trainer
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=tokenized_dataset["train"],
-        eval_dataset=tokenized_dataset["validation"],
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
         tokenizer=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
         compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
     # Train the model
@@ -176,19 +242,39 @@ def train_and_evaluate_model(model_name, dataset):
 
 # Small models to test
 small_models = [
+    # "BAAI/bge-small-en-v1.5",       # Small BGE embedding model. less relevant for classification
+    # "sentence-transformers/all-MiniLM-L6-v2",  # Compact sentence transformer needs import modification
+    # "cross-encoder/ms-marco-MiniLM-L-6-v2",    # QA-specific small model needs import modification
+    # "facebook/bart-base",           # Smaller BART model for text understanding
+
     "distilbert-base-uncased",  # Small and fast
     "google/mobilebert-uncased",  # Very small and fast
     "microsoft/deberta-v3-small",  # DeBERTa small
-    "prajjwal1/bert-tiny",  # Tiny BERT (4 layers)
+    "prajjwal1/bert-tiny",  # Tiny BERT (4 layers) bad results (keep)
 ]
 
 # Large models to test
 large_models = [
+    # "BAAI/bge-large-en-v1.5",  # Large BGE embedding model. less relevant for classification
+    # "sentence-transformers/all-mpnet-base-v2",  # Strong sentence transformer. less relevant for classification
+    # "facebook/bart-large",  # Good for text understanding too large
+    "google/electra-large-discriminator",  # Strong discriminator model. very bad results
     "bert-large-uncased",  # Larger BERT
     "roberta-large",  # Larger RoBERTa
     "microsoft/deberta-v3-base",  # Base DeBERTa
     "microsoft/deberta-v3-large",  # Large DeBERTa
 ]
+
+knowledge_corpus = []
+programming_datasets = [
+    ("codeparrot/apps", "train[:1000]"),
+    ("open-r1/verifiable-coding-problems-python-10k", "train[:1000]")
+]
+
+for dataset_name, split in programming_datasets:
+    print(f"Loading dataset: {dataset_name}")
+    dataset_corpus = prepare_knowledge_corpus(dataset_name=dataset_name, split=split)
+    knowledge_corpus.extend(dataset_corpus)
 
 # Store results
 all_results = {}
@@ -197,7 +283,7 @@ all_results = {}
 print("\n===== EVALUATING SMALL MODELS =====")
 for model_name in small_models:
     try:
-        results, model_path = train_and_evaluate_model(model_name, sampled_data_dict)
+        results, model_path = train_and_evaluate_model(model_name, sampled_data_dict, knowledge_corpus)
         all_results[model_name] = {
             "metrics": results,
             "path": model_path,
