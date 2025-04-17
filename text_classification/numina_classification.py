@@ -32,17 +32,81 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
         problem = self.problems[idx]
         solution = self.solutions[idx]
 
-        # Retrieve relevant context
+        # Create classification-specific prompt for NovaSky-AI math problems dataset
+        task_prompt = (
+            "Task: Classify this mathematical problem's difficulty on a scale from 1 to 10.\n\n"
+            "Difficulty Scale Guide:\n"
+            "- Level 1-2: Very easy problems requiring only basic arithmetic and simple calculations\n"
+            "- Level 3-4: Easy problems using elementary algebra, geometry, or number theory concepts\n"
+            "- Level 5-6: Medium difficulty requiring multiple mathematical concepts or standard techniques\n"
+            "- Level 7-8: Challenging problems at AMC level requiring insight and mathematical maturity\n"
+            "- Level 9-10: Very difficult problems at olympiad level requiring deep mathematical knowledge and creativity\n\n"
+            "Evaluation factors: conceptual depth, solution complexity, required background knowledge, insight needed"
+        )
+
+        # Step 1: First prioritize the problem (highest priority)
+        problem_text = f"Problem: {problem}"
+        problem_encoding = self.tokenizer(
+            problem_text,
+            truncation=True,
+            max_length=self.tokenizer.model_max_length // 3,
+            return_length=True
+        )
+        problem_length = problem_encoding["length"][0]
+        problem_truncated = self.tokenizer.decode(
+            problem_encoding["input_ids"],
+            skip_special_tokens=True
+        )
+
+        # Step 2: Allocate tokens for the solution (second priority)
+        remaining_tokens = self.tokenizer.model_max_length - problem_length - 2
+        solution_text = f"Solution: {solution}"
+        solution_encoding = self.tokenizer(
+            solution_text,
+            truncation=True,
+            max_length=remaining_tokens // 2,
+            return_length=True
+        )
+        solution_length = solution_encoding["length"][0]
+        solution_truncated = self.tokenizer.decode(
+            solution_encoding["input_ids"],
+            skip_special_tokens=True
+        )
+
+        # Step 3: Retrieve context and allocate remaining tokens
         query = f"{problem} {solution}"
         retrieved_docs = self.retriever.retrieve(query, k=self.k)
         context = " ".join([doc.page_content for doc in retrieved_docs])
 
-        # Format input with context, problem, and solution
-        text = f"Context: {context} Problem: {problem} Solution: {solution}"
+        # Calculate remaining tokens, including space for the task prompt
+        prompt_encoding = self.tokenizer(task_prompt, return_length=True)
+        prompt_length = prompt_encoding["length"][0]
 
-        # Tokenize
-        encodings = self.tokenizer(text, truncation=True, padding="max_length",
-                                   max_length=512, return_tensors="pt")
+        # Use remaining tokens for context
+        remaining_tokens = self.tokenizer.model_max_length - problem_length - solution_length - prompt_length - 5
+        context_text = f"Retrieved Examples: {context}"
+        context_encoding = self.tokenizer(
+            context_text,
+            truncation=True,
+            max_length=remaining_tokens,
+            return_length=True
+        )
+        context_truncated = self.tokenizer.decode(
+            context_encoding["input_ids"],
+            skip_special_tokens=True
+        )
+
+        # Combine components with task prompt first for better instruction following
+        text = f"{task_prompt}\n{context_truncated}\n{problem_truncated}\n{solution_truncated}"
+
+        # Final encoding
+        encodings = self.tokenizer(
+            text,
+            truncation=True,
+            padding="max_length",
+            max_length=self.tokenizer.model_max_length,
+            return_tensors="pt"
+        )
 
         # Convert to appropriate format
         item = {key: val.squeeze(0) for key, val in encodings.items()}
@@ -186,7 +250,7 @@ def train_and_evaluate_model(model_name, dataset, knowledge_corpus=None):
     )
 
     # Define model save path
-    model_save_path = f"difficulty_classification/models/{model_name.replace('/', '_')}_nova"
+    model_save_path = f"difficulty_classification/models/{model_name.replace('/', '_')}_rag"
 
     # Define training arguments
     training_args = TrainingArguments(
@@ -267,14 +331,21 @@ large_models = [
 
 knowledge_corpus = []
 programming_datasets = [
-    ("codeparrot/apps", "train[:1000]"),
-    ("open-r1/verifiable-coding-problems-python-10k", "train[:1000]")
+    ("codeparrot/apps", "train[:1000]"),                      # Works correctly
+    ("open-r1/OpenR1-Math-220k", "train[:1000]"),
+    # ("deepmind/math_dataset", "algebra__linear_1d[:1000]"), # Specify config
+    ("sciq", "train[:1000]"),                               # Alternative science dataset
+    ("NeelNanda/pile-10k", "train[:1000]"),  # Smaller subset of Pile, faster loading
+    ("miike-ai/mathqa", "train[:1000]"),  # Math QA dataset without config needs
+    ("squad_v2", "train[:1000]"),  # Well-maintained QA dataset
+    ("nlile/hendrycks-MATH-benchmark", "train[:1000]"), # Math problems across various subjects
 ]
 
 for dataset_name, split in programming_datasets:
     print(f"Loading dataset: {dataset_name}")
     dataset_corpus = prepare_knowledge_corpus(dataset_name=dataset_name, split=split)
     knowledge_corpus.extend(dataset_corpus)
+print(f'Length of knowledge corpus: {len(knowledge_corpus)}')
 
 # Store results
 all_results = {}

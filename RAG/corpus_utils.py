@@ -30,95 +30,121 @@ def prepare_knowledge_corpus(file_path=None, dataset_name=None, split=None):
                 print(f"Dataset structure sample: {list(first_item.keys())}")
 
             if dataset_name == "codeparrot/apps":
-                # Fixed APPS dataset handling
                 for item in hf_dataset:
-                    # Check actual keys in the dataset
-                    if "problem_statement" in item:
-                        problem = item["problem_statement"]
-                    elif "question" in item:
-                        problem = item["question"]
-                    else:
-                        # Use the first long text field found
-                        text_fields = [k for k, v in item.items() if isinstance(v, str) and len(v) > 50]
-                        problem = item.get(text_fields[0], "") if text_fields else ""
-
-                    # Try to get solutions
-                    solutions = ""
+                    problem = item.get("problem", "")
+                    solution = ""
                     if "solutions" in item and isinstance(item["solutions"], list) and item["solutions"]:
-                        solutions = item["solutions"][0]
-                    elif "answer" in item:
-                        solutions = item["answer"]
-
-                    content = f"Problem: {problem}\n\nSolutions: {solutions}"
+                        solution = item["solutions"][0]
+                    content = f"Problem: {problem}\n\nSolution: {solution}"
                     chunks = text_splitter.split_text(content)
                     documents.extend([Document(
                         page_content=chunk,
                         metadata={"difficulty": item.get("difficulty", "")}
                     ) for chunk in chunks])
 
-            elif dataset_name == "squad":
+            elif dataset_name == "open-r1/github-python-code-to-desc":
                 for item in hf_dataset:
-                    if "context" in item:
-                        doc = Document(
-                            page_content=item["context"],
-                            metadata={
-                                "title": item.get("title", ""),
-                                "id": item.get("id", ""),
-                                "question": item.get("question", ""),
-                                "answers": item.get("answers", {})
-                            }
-                        )
-                        documents.append(doc)
+                    code = item.get("code", "")
+                    description = item.get("desc", "")
+                    content = f"Description: {description}\n\nCode: {code}"
+                    chunks = text_splitter.split_text(content)
+                    documents.extend([Document(page_content=chunk) for chunk in chunks])
 
-            # Handle other datasets...
+            elif dataset_name == "math_dataset":
+                for item in hf_dataset:
+                    question = item.get("question", "")
+                    answer = item.get("answer", "")
+                    type_field = item.get("type", "")
+                    content = f"Math problem type: {type_field}\nQuestion: {question}\nAnswer: {answer}"
+                    chunks = text_splitter.split_text(content)
+                    documents.extend([Document(page_content=chunk) for chunk in chunks])
+
+            elif dataset_name == "allenai/science-qa":
+                for item in hf_dataset:
+                    question = item.get("question", "")
+                    answer = item.get("answer", "")
+                    lecture = item.get("lecture", "")
+                    solution = item.get("solution", "")
+                    content = f"Question: {question}\nAnswer: {answer}\nExplanation: {solution}\nContext: {lecture}"
+                    chunks = text_splitter.split_text(content)
+                    documents.extend([Document(page_content=chunk) for chunk in chunks])
+
+            elif dataset_name == "EleutherAI/pile":
+                for item in hf_dataset:
+                    text = item.get("text", "")
+                    chunks = text_splitter.split_text(text)
+                    documents.extend([Document(page_content=chunk) for chunk in chunks])
+
+            elif dataset_name == "gsm8k":
+                for item in hf_dataset:
+                    question = item.get("question", "")
+                    answer = item.get("answer", "")
+                    content = f"Math Problem: {question}\n\nSolution: {answer}"
+                    chunks = text_splitter.split_text(content)
+                    documents.extend([Document(page_content=chunk) for chunk in chunks])
+
+            elif dataset_name == "wikihow/wikihow":
+                for item in hf_dataset:
+                    title = item.get("title", "")
+                    text = item.get("text", "")
+                    content = f"Topic: {title}\n{text}"
+                    chunks = text_splitter.split_text(content)
+                    documents.extend([Document(page_content=chunk) for chunk in chunks])
+
+            elif dataset_name == "competition_math":
+                for item in hf_dataset:
+                    problem = item.get("problem", "")
+                    solution = item.get("solution", "")
+                    level = item.get("level", "")
+                    source = item.get("source", "")
+                    content = f"Math Competition: {source}, Level: {level}\nProblem: {problem}\nSolution: {solution}"
+                    chunks = text_splitter.split_text(content)
+                    documents.extend([Document(page_content=chunk) for chunk in chunks])
+
             else:
                 # Generic handling for other datasets
                 candidate_fields = [
-                    # Question and content fields
-                    'problem', 'question', 'answer', 'solution', 'gold_standard_solution',
+                    'problem', 'question', 'answer', 'solution', 'solutions', 'gold_standard_solution',
                     'title', 'body', 'text', 'content', 'document', 'instruction', 'input', 'context',
-                    # Difficulty-related fields
-                    'difficulty', 'difficulty_level', 'complexity', 'level', 'rating',
-                    'score', 'grade_level', 'challenge_rating', 'hard_level', 'skill_level',
-                    # Context fields that might describe difficulty
-                    'difficulty_description', 'complexity_explanation', 'difficulty_justification',
-                    # Additional fields seen in the datasets
-                    'output'
+                    'difficulty', 'difficulty_level', 'complexity', 'level', 'code', 'desc',
+                    # Add dataset-specific fields
+                    'problem_statement', 'lecture', 'explanation', 'source', 'type',
+                    'mathematics_problem', 'mathematics_solution', 'proof',
+                    'problem_id', 'input_output', 'url', 'starter_code',
+                    # Math dataset fields
+                    'module', 'level', 'category',
+                    # Science fields
+                    'theory', 'hypothesis', 'experiment',
+                    # Generic fields
+                    'python', 'function', 'implementation'
                 ]
 
                 for item in hf_dataset:
-                    # Filter to fields that actually exist in the item
                     available_fields = [f for f in candidate_fields if f in item and item[f] is not None]
 
                     if available_fields:
-                        # Find fields with string content
                         text_fields = [f for f in available_fields if isinstance(item[f], str) and len(item[f]) > 10]
 
                         if text_fields:
-                            # Use the longest text field
                             longest_field = max(text_fields, key=lambda f: len(item[f]))
                             content = item[longest_field]
 
-                            # Add difficulty info if available
                             difficulty_info = ""
-                            for field in ['difficulty', 'difficulty_level', 'complexity', 'level', 'rating']:
+                            for field in ['difficulty', 'difficulty_level', 'complexity', 'level']:
                                 if field in item and item[field] is not None:
                                     difficulty_info = f"Difficulty: {item[field]}. "
                                     break
 
-                            # Combine difficulty with content
                             full_content = difficulty_info + content
-
                             chunks = text_splitter.split_text(full_content)
                             for chunk in chunks:
-                                doc = Document(
+                                documents.append(Document(
                                     page_content=chunk,
                                     metadata={
                                         "source": dataset_name,
                                         "difficulty": item.get("difficulty", "")
                                     }
-                                )
-                                documents.append(doc)
+                                ))
 
             print(f"Loaded {len(documents)} documents from {dataset_name}")
 
