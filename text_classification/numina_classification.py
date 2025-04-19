@@ -1,4 +1,5 @@
 import os
+import re
 import evaluate
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
@@ -8,21 +9,31 @@ import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 import seaborn as sns
+from tqdm import tqdm
 from transformers.trainer_callback import EarlyStoppingCallback
 from RAG.retriever import RAGRetriever
 from RAG.corpus_utils import prepare_knowledge_corpus
+from langchain_core.documents.base import Document
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
+def precompute_rag_retrievals(problems, solutions, retriever, k=3):
+    precomputed_retrievals = []
+    for problem, solution in tqdm(zip(problems, solutions)):
+        query = f"Problem:{problem} Solution:{solution}"
+        retrieved_docs = retriever.retrieve(query, k=k)
+        precomputed_retrievals.append(retrieved_docs)
+    return precomputed_retrievals
 
 class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
-    def __init__(self, problems, solutions, labels, tokenizer, retriever, k=5):
+    def __init__(self, problems, solutions, labels, tokenizer, precomputed_retrievals=None, retriever=None, k=3):
         self.problems = problems
         self.solutions = solutions
         self.labels = labels
         self.tokenizer = tokenizer
         self.retriever = retriever
+        self.precomputed_retrievals = precomputed_retrievals
         self.k = k
 
     def __len__(self):
@@ -31,6 +42,8 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         problem = self.problems[idx]
         solution = self.solutions[idx]
+
+        safe_max_length = min(512, self.tokenizer.model_max_length)
 
         # Create classification-specific prompt for NovaSky-AI math problems dataset
         task_prompt = (
@@ -49,7 +62,7 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
         problem_encoding = self.tokenizer(
             problem_text,
             truncation=True,
-            max_length=self.tokenizer.model_max_length // 3,
+            max_length=safe_max_length // 2,
             return_length=True
         )
         problem_length = problem_encoding["length"][0]
@@ -59,12 +72,12 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
         )
 
         # Step 2: Allocate tokens for the solution (second priority)
-        remaining_tokens = self.tokenizer.model_max_length - problem_length - 2
+        remaining_tokens = safe_max_length - problem_length - 2
         solution_text = f"Solution: {solution}"
         solution_encoding = self.tokenizer(
             solution_text,
             truncation=True,
-            max_length=remaining_tokens // 2,
+            max_length=remaining_tokens // 3,
             return_length=True
         )
         solution_length = solution_encoding["length"][0]
@@ -74,17 +87,25 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
         )
 
         # Step 3: Retrieve context and allocate remaining tokens
-        query = f"{problem} {solution}"
-        retrieved_docs = self.retriever.retrieve(query, k=self.k)
-        context = " ".join([doc.page_content for doc in retrieved_docs])
+        query = f"Problem:{problem} Solution:{solution}"
+        retrieved_docs = self.precomputed_retrievals[idx] if self.precomputed_retrievals else self.retriever(query, k=self.k)
+        formatted_examples = []
 
+        for i, doc in enumerate(retrieved_docs):
+            content = doc.page_content
+            # Case-insensitive replacements using regex
+            content = re.sub(r'(?i)problem:', "Example question:", content)
+            content = re.sub(r'(?i)solution:', "Example answer:", content)
+            formatted_examples.append(f"Reference #{i + 1}: {content}")
+
+        context = "\n".join(formatted_examples)
+        context_text = f"SIMILAR EXAMPLES (FOR REFERENCE ONLY):\n{context}\n"
         # Calculate remaining tokens, including space for the task prompt
         prompt_encoding = self.tokenizer(task_prompt, return_length=True)
         prompt_length = prompt_encoding["length"][0]
 
         # Use remaining tokens for context
-        remaining_tokens = self.tokenizer.model_max_length - problem_length - solution_length - prompt_length - 5
-        context_text = f"Retrieved Examples: {context}"
+        remaining_tokens = safe_max_length - problem_length - solution_length - prompt_length - 5
         context_encoding = self.tokenizer(
             context_text,
             truncation=True,
@@ -97,14 +118,15 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
         )
 
         # Combine components with task prompt first for better instruction following
-        text = f"{task_prompt}\n{context_truncated}\n{problem_truncated}\n{solution_truncated}"
-
+        text = (f"{task_prompt}\n\n{context_truncated}\n\n"
+                f"**EVALUATE THIS PROBLEM**\n{problem_truncated}\n{solution_truncated}\n"
+                f"**END OF PROBLEM TO EVALUATE**")
         # Final encoding
         encodings = self.tokenizer(
             text,
             truncation=True,
             padding="max_length",
-            max_length=self.tokenizer.model_max_length,
+            max_length=safe_max_length,
             return_tensors="pt"
         )
 
@@ -114,46 +136,10 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
 
         return item
 
-# Load the dataset from Hugging Face
-print("Loading dataset...")
-novadata = load_dataset("NovaSky-AI/labeled_numina_difficulty_859K")
-# Define the number of samples you want
-N = 50000  # Your desired sample size
-total_size = len(novadata["train"])
-sample_percentage = N / total_size
-
-
-# Load random subset directly
-sampled_dataset = load_dataset(
-    "NovaSky-AI/labeled_numina_difficulty_859K",
-    split=f"train[:{N}]"  # e.g., "train[:3.49%]"
-)
-
-sampled_data_dict = {
-    "train": sampled_dataset
-}
-
-# Create a validation split
-splits = sampled_dataset.train_test_split(test_size=0.2, seed=42)
-sampled_data_dict = {
-    "train": splits["train"],
-    "validation": splits["test"]
-}
-
-print(f"Training set size: {len(sampled_data_dict['train'])}")
-print(f"Validation set size: {len(sampled_data_dict['validation'])}")
-
-
-# Define label mappings (1-10 difficulty levels)
-id2label = {i: str(i + 1) for i in range(10)}
-label2id = {str(i + 1): i for i in range(10)}
-
-# Load metrics
-accuracy = evaluate.load("accuracy")
-f1 = evaluate.load("f1")
-
 
 def compute_metrics(eval_pred):
+    accuracy = evaluate.load("accuracy")
+    f1 = evaluate.load("f1")
     predictions, labels = eval_pred
     predictions = np.argmax(predictions, axis=1)
 
@@ -202,26 +188,30 @@ def preprocess_function(examples, tokenizer):
     return tokenized
 
 
-def train_and_evaluate_model(model_name, dataset, knowledge_corpus=None):
-    """Train and evaluate a classification model with RAG if knowledge_corpus is provided"""
+def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_retrievals=None, use_rag=True):
+    # Define label mappings (1-10 difficulty levels)
+    id2label = {i: str(i + 1) for i in range(10)}
+    label2id = {str(i + 1): i for i in range(10)}
+
+    # Load metrics
+    accuracy = evaluate.load("accuracy")
+    f1 = evaluate.load("f1")
+    """Train and evaluate a classification model with optional RAG retrievals"""
     print(f"\n===== Training model: {model_name} =====")
+    print(f"Using RAG: {use_rag}")
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    if knowledge_corpus:
-        # Using RAG approach
-        print("Using RAG augmentation...")
-        retriever = RAGRetriever(knowledge_corpus, embedding_model="BAAI/bge-large-en-v1.5")
-
-        # Create RAG-augmented datasets
+    if use_rag and train_retrievals and val_retrievals:
+        # Use RAG-augmented datasets
         train_dataset = RAGAugmentedClassificationDataset(
             problems=dataset["train"]["problem"],
             solutions=dataset["train"]["solution"],
             labels=[int(round(float(d))) - 1 for d in dataset["train"]["gpt_difficulty_parsed"]],
             tokenizer=tokenizer,
-            retriever=retriever,
-            k=3  # Number of documents to retrieve
+            precomputed_retrievals=train_retrievals,
+            k=3
         )
 
         val_dataset = RAGAugmentedClassificationDataset(
@@ -229,7 +219,7 @@ def train_and_evaluate_model(model_name, dataset, knowledge_corpus=None):
             solutions=dataset["validation"]["solution"],
             labels=[int(round(float(d))) - 1 for d in dataset["validation"]["gpt_difficulty_parsed"]],
             tokenizer=tokenizer,
-            retriever=retriever,
+            precomputed_retrievals=val_retrievals,
             k=3
         )
     else:
@@ -256,8 +246,8 @@ def train_and_evaluate_model(model_name, dataset, knowledge_corpus=None):
     training_args = TrainingArguments(
         output_dir=model_save_path,
         learning_rate=2e-5,
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
+        per_device_train_batch_size=8,
+        per_device_eval_batch_size=8,
         num_train_epochs=6,
         weight_decay=0.01,
         evaluation_strategy="epoch",
@@ -265,7 +255,6 @@ def train_and_evaluate_model(model_name, dataset, knowledge_corpus=None):
         load_best_model_at_end=True,
         metric_for_best_model="f1_macro",
         greater_is_better=True,
-        report_to="wandb",
     )
 
     # Initialize trainer
@@ -303,123 +292,177 @@ def train_and_evaluate_model(model_name, dataset, knowledge_corpus=None):
 
     return eval_results, model_save_path
 
+def main(use_rag=True):
+    print("Loading dataset...")
+    novadata = load_dataset("NovaSky-AI/labeled_numina_difficulty_859K")
+    # Define the number of samples you want
+    N = 50000  # Your desired sample size
+    total_size = len(novadata["train"])
+    sample_percentage = N / total_size
+
+    # Load random subset directly
+    sampled_dataset = load_dataset(
+        "NovaSky-AI/labeled_numina_difficulty_859K",
+        split=f"train[:{N}]"
+    )
+
+
+    # Create a validation split
+    splits = sampled_dataset.train_test_split(test_size=0.2, seed=42)
+    sampled_data_dict = {
+        "train": splits["train"],
+        "validation": splits["test"]
+    }
+
+    print(f"Training set size: {len(sampled_data_dict['train'])}")
+    print(f"Validation set size: {len(sampled_data_dict['validation'])}")
 
 # Small models to test
-small_models = [
-    # "BAAI/bge-small-en-v1.5",       # Small BGE embedding model. less relevant for classification
-    # "sentence-transformers/all-MiniLM-L6-v2",  # Compact sentence transformer needs import modification
-    # "cross-encoder/ms-marco-MiniLM-L-6-v2",    # QA-specific small model needs import modification
-    # "facebook/bart-base",           # Smaller BART model for text understanding
+    small_models = [
+        # "BAAI/bge-small-en-v1.5",       # Small BGE embedding model. less relevant for classification
+        # "sentence-transformers/all-MiniLM-L6-v2",  # Compact sentence transformer needs import modification
+        # "cross-encoder/ms-marco-MiniLM-L-6-v2",    # QA-specific small model needs import modification
+        # "facebook/bart-base",           # Smaller BART model for text understanding
 
-    "distilbert-base-uncased",  # Small and fast
-    "google/mobilebert-uncased",  # Very small and fast
-    "microsoft/deberta-v3-small",  # DeBERTa small
-    "prajjwal1/bert-tiny",  # Tiny BERT (4 layers) bad results (keep)
-]
+        "distilbert-base-uncased",  # Small and fast
+        "google/mobilebert-uncased",  # Very small and fast
+        "microsoft/deberta-v3-small",  # DeBERTa small
+        "prajjwal1/bert-tiny",  # Tiny BERT (4 layers) bad results (keep)
+    ]
 
-# Large models to test
-large_models = [
-    # "BAAI/bge-large-en-v1.5",  # Large BGE embedding model. less relevant for classification
-    # "sentence-transformers/all-mpnet-base-v2",  # Strong sentence transformer. less relevant for classification
-    # "facebook/bart-large",  # Good for text understanding too large
-    "google/electra-large-discriminator",  # Strong discriminator model. very bad results
-    "bert-large-uncased",  # Larger BERT
-    "roberta-large",  # Larger RoBERTa
-    "microsoft/deberta-v3-base",  # Base DeBERTa
-    "microsoft/deberta-v3-large",  # Large DeBERTa
-]
+    # Large models to test
+    large_models = [
+        # "BAAI/bge-large-en-v1.5",  # Large BGE embedding model. less relevant for classification
+        # "sentence-transformers/all-mpnet-base-v2",  # Strong sentence transformer. less relevant for classification
+        # "facebook/bart-large",  # Good for text understanding too large
+        # "google/electra-large-discriminator",  # Strong discriminator model. very bad results
+        # "bert-large-uncased",  # Larger BERT
+        # "roberta-large",  # Larger RoBERTa
+        # "microsoft/deberta-v3-base",  # Base DeBERTa
+        # "microsoft/deberta-v3-large",  # Large DeBERTa
+    ]
 
-knowledge_corpus = []
-programming_datasets = [
-    ("codeparrot/apps", "train[:1000]"),                      # Works correctly
-    ("open-r1/OpenR1-Math-220k", "train[:1000]"),
-    # ("deepmind/math_dataset", "algebra__linear_1d[:1000]"), # Specify config
-    ("sciq", "train[:1000]"),                               # Alternative science dataset
-    ("NeelNanda/pile-10k", "train[:1000]"),  # Smaller subset of Pile, faster loading
-    ("miike-ai/mathqa", "train[:1000]"),  # Math QA dataset without config needs
-    ("squad_v2", "train[:1000]"),  # Well-maintained QA dataset
-    ("nlile/hendrycks-MATH-benchmark", "train[:1000]"), # Math problems across various subjects
-]
+    knowledge_corpus = []
+    programming_datasets = [
+        ("codeparrot/apps", "train[:500]"),                      # Works correctly
+        ("open-r1/OpenR1-Math-220k", "train[:500]"),
+        ("sciq", "train[:500]"),                               # Alternative science dataset
+        ("NeelNanda/pile-10k", "train[:500]"),  # Smaller subset of Pile, faster loading
+        ("miike-ai/mathqa", "train[:500]"),  # Math QA dataset without config needs
+        ("squad_v2", "train[:500]"),  # Well-maintained QA dataset
+        ("nlile/hendrycks-MATH-benchmark", "train[:500]"), # Math problems across various subjects
+    ]
 
-for dataset_name, split in programming_datasets:
-    print(f"Loading dataset: {dataset_name}")
-    dataset_corpus = prepare_knowledge_corpus(dataset_name=dataset_name, split=split)
-    knowledge_corpus.extend(dataset_corpus)
-print(f'Length of knowledge corpus: {len(knowledge_corpus)}')
+    for dataset_name, split in programming_datasets:
+        print(f"Loading dataset: {dataset_name}")
+        dataset_corpus = prepare_knowledge_corpus(dataset_name=dataset_name, split=split)
+        knowledge_corpus.extend(dataset_corpus)
+    print(f'Length of knowledge corpus: {len(knowledge_corpus)}')
 
-# Store results
-all_results = {}
+    retrievals_file = "precomputed_retrievals.pt"
+    if os.path.exists(retrievals_file):
+        print(f"Loading precomputed retrievals from {retrievals_file}...")
+        torch.serialization.add_safe_globals([Document])
+        retrievals_data = torch.load(retrievals_file)
+        train_retrievals = retrievals_data["train"]
+        val_retrievals = retrievals_data["val"]
+    else:
+        # Create retriever once
+        print('Creating retriever...')
+        retriever = RAGRetriever(knowledge_corpus, embedding_model="BAAI/bge-large-en-v1.5")
 
-# Evaluate small models
-print("\n===== EVALUATING SMALL MODELS =====")
-for model_name in small_models:
-    try:
-        results, model_path = train_and_evaluate_model(model_name, sampled_data_dict, knowledge_corpus)
-        all_results[model_name] = {
-            "metrics": results,
-            "path": model_path,
-            "size": "Small"
-        }
-    except Exception as e:
-        print(f"Error training {model_name}: {e}")
+        # Precompute retrievals once before training any models
+        print("Precomputing retrievals for training set...")
+        train_retrievals = precompute_rag_retrievals(
+            problems=sampled_data_dict["train"]["problem"],
+            solutions=sampled_data_dict["train"]["solution"],
+            retriever=retriever,
+            k=3
+        )
 
-# Evaluate large models
-print("\n===== EVALUATING LARGE MODELS =====")
-for model_name in large_models:
-    try:
-        results, model_path = train_and_evaluate_model(model_name, sampled_data_dict)
-        all_results[model_name] = {
-            "metrics": results,
-            "path": model_path,
-            "size": "Large"
-        }
-    except Exception as e:
-        print(f"Error training {model_name}: {e}")
+        print("Precomputing retrievals for validation set...")
+        val_retrievals = precompute_rag_retrievals(
+            problems=sampled_data_dict["validation"]["problem"],
+            solutions=sampled_data_dict["validation"]["solution"],
+            retriever=retriever,
+            k=3
+        )
 
-# Build comparison data
-print("\n===== MODEL COMPARISON =====")
-comparison_data = []
-for model_name, result in all_results.items():
-    metrics = result["metrics"]
-    model_size = result["size"]
+        # Save retrievals to disk
+        print(f"Saving precomputed retrievals to {retrievals_file}...")
+        torch.save({"train": train_retrievals, "val": val_retrievals}, retrievals_file)
 
-    comparison_data.append({
-        "model": model_name,
-        "size": model_size,
-        "accuracy": metrics.get("eval_accuracy", "N/A"),
-        "f1_macro": metrics.get("eval_f1_macro", "N/A"),
-        "f1_weighted": metrics.get("eval_f1_weighted", "N/A")
-    })
 
-    print(f"{model_name} ({model_size}):")
-    print(f"  Accuracy: {metrics.get('eval_accuracy', 'N/A'):.4f}")
-    print(f"  F1 Macro: {metrics.get('eval_f1_macro', 'N/A'):.4f}")
-    print(f"  F1 Weighted: {metrics.get('eval_f1_weighted', 'N/A'):.4f}")
 
-# Save results to CSV
-results_df = pd.DataFrame(comparison_data)
-results_df.to_csv("difficulty_classification_comparison.csv", index=False)
-print(f"Comparison results saved to difficulty_classification_comparison.csv")
+    # Store results
+    all_results = {}
+    for model_name in small_models + large_models:
+        try:
+            results, model_path = train_and_evaluate_model(
+                model_name,
+                sampled_data_dict,
+                train_retrievals,
+                val_retrievals,
+                use_rag=use_rag,
+            )
+            model_size = "Small" if model_name in small_models else "Large"
+            all_results[model_name] = {
+                "metrics": results,
+                "path": model_path,
+                "size": model_size
+            }
+        except Exception as e:
+            print(f"Error training {model_name}: {e}")
 
-# Visualize results
-plt.figure(figsize=(12, 8))
-results_df = results_df.sort_values(by=["size", "f1_macro"])
-sns.barplot(x="model", y="f1_macro", hue="size", data=results_df)
-plt.title("Model Comparison: F1 Macro Score")
-plt.xlabel("Model")
-plt.ylabel("F1 Macro (higher is better)")
-plt.xticks(rotation=45, ha="right")
-plt.tight_layout()
-plt.savefig("model_comparison_f1.png")
 
-# Use only numeric columns for mean calculation
-numeric_columns = ['accuracy', 'f1_macro', 'f1_weighted']
-size_comparison = results_df.groupby("size")[numeric_columns].mean()
+    # Build comparison data
+    print("\n===== MODEL COMPARISON =====")
+    comparison_data = []
+    for model_name, result in all_results.items():
+        metrics = result["metrics"]
+        model_size = result["size"]
 
-print("\n===== SMALL VS LARGE MODELS =====")
-print(f"Average metrics by model size:")
-print(size_comparison)
+        comparison_data.append({
+            "model": model_name,
+            "model_path": result["path"],
+            "size": model_size,
+            "accuracy": metrics.get("eval_accuracy", "N/A"),
+            "f1_macro": metrics.get("eval_f1_macro", "N/A"),
+            "f1_weighted": metrics.get("eval_f1_weighted", "N/A")
+        })
 
-# Print best model
-best_model = results_df.loc[results_df["f1_macro"].idxmax()]
-print(f"\nBest model: {best_model['model']} (F1 Macro: {best_model['f1_macro']:.4f})")
+        print(f"{model_name} ({model_size}):")
+        print(f"  Accuracy: {metrics.get('eval_accuracy', 'N/A'):.4f}")
+        print(f"  F1 Macro: {metrics.get('eval_f1_macro', 'N/A'):.4f}")
+        print(f"  F1 Weighted: {metrics.get('eval_f1_weighted', 'N/A'):.4f}")
+
+    # Save results to CSV
+    results_df = pd.DataFrame(comparison_data)
+    results_df.to_csv("difficulty_classification_comparison.csv", index=False)
+    print(f"Comparison results saved to difficulty_classification_comparison.csv")
+
+    # Visualize results
+    plt.figure(figsize=(12, 8))
+    results_df = results_df.sort_values(by=["size", "f1_macro"])
+    sns.barplot(x="model", y="f1_macro", hue="size", data=results_df)
+    plt.title("Model Comparison: F1 Macro Score")
+    plt.xlabel("Model")
+    plt.ylabel("F1 Macro (higher is better)")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig("model_comparison_f1.png")
+
+    # Use only numeric columns for mean calculation
+    numeric_columns = ['accuracy', 'f1_macro', 'f1_weighted']
+    size_comparison = results_df.groupby("size")[numeric_columns].mean()
+
+    print("\n===== SMALL VS LARGE MODELS =====")
+    print(f"Average metrics by model size:")
+    print(size_comparison)
+
+    # Print best model
+    best_model = results_df.loc[results_df["f1_macro"].idxmax()]
+    print(f"\nBest model: {best_model['model']} (F1 Macro: {best_model['f1_macro']:.4f})")
+
+if __name__ == "__main__":
+    main(use_rag=True)
