@@ -16,11 +16,13 @@ model_name = "google/flan-t5-base"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = T5ForConditionalGeneration.from_pretrained(model_name).to(device)
 loss_fn = torch.nn.CrossEntropyLoss()
-
+print(f"CUDA available: {torch.cuda.is_available()}")
+print(f"Using device: {torch.cuda.get_device_name(0)}")
 
 def compute_losses(df_subset, batch_size=24):
     """Compute QA cross-entropy losses on a DataFrame subset using Flan-T5."""
     qa_losses = []
+
     for i in tqdm(range(0, len(df_subset), batch_size), desc="Flan-T5 QA pairs"):
         batch = df_subset.iloc[i:i+batch_size]
         prompts = [f"Write an answer to the following question:\nQuestion: {q}\nAnswer:" for q in batch['question_text']]
@@ -71,6 +73,6 @@ def process_and_regress(dataset_type, source, dataset_name, estimator_params={'m
     )
 
 if __name__ == "__main__":
-    process_and_regress('dataset', 'NovaSky-AI/labeled_numina_difficulty_162K', 'NovaSky')
     process_and_regress('csv', 'DS_tests_with_difficulty.csv', 'DS')
     process_and_regress('csv', 'merged_leetcode_df.csv', 'Leetcode')
+    process_and_regress('dataset', 'NovaSky-AI/labeled_numina_difficulty_162K', 'NovaSky')
