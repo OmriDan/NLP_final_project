@@ -5,6 +5,8 @@ from scipy.sparse import coo_matrix
 
 from .components import BaseRegressionComponent
 
+from tqdm import tqdm
+
 
 class RegressionModule(object):
 
@@ -42,7 +44,7 @@ class RegressionModule(object):
         :param y: iterable containing target values
         :return:
         """
-        for component in self.components:
+        for component in tqdm(self.components, desc="Regression: Training components"):
             component.train(x, y)
 
     def predict(self, x: coo_matrix) -> List[float]:
@@ -54,7 +56,7 @@ class RegressionModule(object):
         :return:
         """
         partial_results = []
-        for component in self.components:
+        for component in tqdm(self.components, desc="Regression: Predicting with components"):
             partial_results.append(component.predict(x))
         return np.mean(partial_results, axis=0)
 

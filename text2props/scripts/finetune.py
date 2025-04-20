@@ -6,6 +6,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 import pandas as pd
 import numpy as np
+from datasets import load_dataset
+from tqdm import tqdm
 
 # Verifying that torch detects the GPU and CUDA
 print(torch.__version__)
@@ -25,10 +27,21 @@ torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 # Load your dataset
-df = pd.read_csv("../data/raw/merged_leetcode_df.csv")  # Adjust path as needed
-df["combined_text"] = df["content"] + " " + df["python"]
+#df = pd.read_csv("../data/raw/merged_leetcode_df.csv")  # Adjust path as needed
+#df["combined_text"] = df["content"] + " " + df["python"]
+#questions = df["combined_text"].tolist()
+#difficulties = df["normalized_difficulty"].tolist()
+
+# Load your dataset
+ds = load_dataset("NovaSky-AI/labeled_numina_difficulty_162K")
+## This is processing required for the NovaSky dataset
+df = ds["train"].to_pandas()
+df = df[df["gpt_difficulty_parsed"] != -1]  # Filter out rows with invalid difficulty
+df["combined_text"] = df["problem"] + " " +df["solution"].fillna("")  # Combine problem and solution text.
+# Note: Most of the dataset has empty solutions, so we fill them with empty strings.
 questions = df["combined_text"].tolist()
-difficulties = df["normalized_difficulty"].tolist()
+df["gpt_difficulty_normalized"] = (df["gpt_difficulty_parsed"] - 1) / 9
+difficulties = df["gpt_difficulty_parsed"].tolist()
 
 # Split the data into training and testing sets
 train_texts, test_texts, train_labels, test_labels = train_test_split(
@@ -88,7 +101,7 @@ def fine_tune_model(model_name, train_texts, train_labels, test_texts, test_labe
     for epoch in range(EPOCHS):
         model.train()
         total_loss = 0
-        for batch in train_loader:
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{EPOCHS}", leave=True):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["label"].to(device)
@@ -127,9 +140,9 @@ def fine_tune_model(model_name, train_texts, train_labels, test_texts, test_labe
     tokenizer.save_pretrained(f"../models/{model_name.replace('/', '_')}_fine_tuned")
     return model
 
-# Fine-tune BERT
-print("[INFO] Fine-tuning BERT...")
-bert_model = fine_tune_model(BERT_MODEL_NAME, train_texts, train_labels, test_texts, test_labels)
+# # Fine-tune BERT
+# print("[INFO] Fine-tuning BERT...")
+# bert_model = fine_tune_model(BERT_MODEL_NAME, train_texts, train_labels, test_texts, test_labels)
 
 # Fine-tune CodeBERT
 print("[INFO] Fine-tuning CodeBERT...")

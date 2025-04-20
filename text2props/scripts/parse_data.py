@@ -5,7 +5,7 @@ import pickle
 
 def parse_data(filename: str, leetcode: bool, save_latent_traits: bool, output_path: str = None) -> pd.DataFrame:
     """
-    Parse a CSV file and convert it into 2 DataFrames: One for questions+answers and the other for latent traits.
+    Parse a CSV file and convert it into a DataFrames questions+answers. And save latent traits as a pickle file.
     :param filename: Path to csv
     :param leetcode: If True, parse as LeetCode-style CSV; otherwise, parse as Data Structure course format.
     :return: A DataFrame with columns Q_ID, Q_TEXT, CORRECT_TEXTS, WRONG_TEXTS, and DIFFICULTY.
@@ -38,7 +38,7 @@ def parse_data(filename: str, leetcode: bool, save_latent_traits: bool, output_p
         df_questions[const.WRONG_TEXTS] = [[] for _ in range(len(df_raw))]
         df_questions[const.DIFFICULTY] = df_raw['Difficulty']
 
-    # Optionally save latent traits as a pickle file
+    # Save latent traits as a pickle file
     if save_latent_traits:
         if output_path is None:
             raise ValueError("output_path must be specified if save_latent_traits is True.")

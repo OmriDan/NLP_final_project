@@ -1,13 +1,11 @@
-                             experiment  variance_train  std_dev_train  variance_test  std_dev_test  error_MAE  error_MSE  error_RMSE  error_R2  error_MAX_ERROR  error_MIN_ERROR  error_nDCG
-    bert_default_preproc_no_readability          0.0603       0.245561       0.060749      0.246472   0.184693   0.056072    0.236795  0.076985         0.519625         0.000288    0.993055
-       bert_default_preproc_readability          0.0603       0.245561       0.060749      0.246472   0.185090   0.055815    0.236251  0.081220         0.513664         0.001007    0.992862
-     bert_python_preproc_no_readability          0.0603       0.245561       0.060749      0.246472   0.182894   0.053879    0.232118  0.113084         0.560061         0.001136    0.993387
-        bert_python_preproc_readability          0.0603       0.245561       0.060749      0.246472   0.183133   0.054334    0.233096  0.105595         0.564449         0.000593    0.993677
-codebert_default_preproc_no_readability          0.0603       0.245561       0.060749      0.246472   0.184004   0.053137    0.230515  0.125291         0.511148         0.000230    0.993575
-   codebert_default_preproc_readability          0.0603       0.245561       0.060749      0.246472   0.183402   0.053055    0.230336  0.126651         0.530849         0.001262    0.993799
- codebert_python_preproc_no_readability          0.0603       0.245561       0.060749      0.246472   0.180459   0.052776    0.229730  0.131239         0.544398         0.000013    0.994044
-    codebert_python_preproc_readability          0.0603       0.245561       0.060749      0.246472   0.180373   0.052475    0.229074  0.136195         0.543972         0.000739    0.994143
-                   tfidf_no_readability          0.0603       0.245561       0.060749      0.246472   0.176346   0.049948    0.223491  0.177787         0.557110         0.000419    0.993286
-                      tfidf_readability          0.0603       0.245561       0.060749      0.246472   0.177632   0.050285    0.224243  0.172248         0.537515         0.000493    0.993282
-                word2vec_no_readability          0.0603       0.245561       0.060749      0.246472   0.181663   0.056129    0.236915  0.076048         0.537024         0.000785    0.992533
-                   word2vec_readability          0.0603       0.245561       0.060749      0.246472   0.182044   0.055946    0.236529  0.079058         0.508732         0.000692    0.992994
+                                       experiment  variance_train  std_dev_train  variance_test  std_dev_test  error_MAE  error_MSE  error_RMSE  error_R2  error_MAX_ERROR  error_MIN_ERROR  error_nDCG
+              bert_default_preproc_no_readability        0.063385       0.251764       0.063591      0.252173   0.118675   0.023508    0.153325  0.630320         0.740266     2.220446e-16    0.999051
+    bert_default_preproc_no_readability_finetuned        0.063385       0.251764       0.063591      0.252173   0.082616   0.012186    0.110391  0.808366         0.893757     1.214093e-05    0.999563
+                 bert_default_preproc_readability        0.063385       0.251764       0.063591      0.252173   0.117401   0.023039    0.151785  0.637708         0.736462     2.220446e-16    0.999080
+       bert_default_preproc_readability_finetuned        0.063385       0.251764       0.063591      0.252173   0.117401   0.023039    0.151785  0.637708         0.736462     2.220446e-16    0.999080
+          codebert_default_preproc_no_readability        0.063385       0.251764       0.063591      0.252173   0.121206   0.024144    0.155382  0.620331         0.742690     2.220446e-16    0.999034
+codebert_default_preproc_no_readability_finetuned        0.063385       0.251764       0.063591      0.252173   0.082706   0.012115    0.110068  0.809487         0.855666     3.085038e-06    0.999573
+             codebert_default_preproc_readability        0.063385       0.251764       0.063591      0.252173   0.120809   0.024038    0.155041  0.621994         0.748789     2.220446e-16    0.999044
+   codebert_default_preproc_readability_finetuned        0.063385       0.251764       0.063591      0.252173        NaN        NaN         NaN       NaN              NaN              NaN         NaN
+                             tfidf_no_readability        0.063385       0.251764       0.063591      0.252173   0.138629   0.031263    0.176813  0.508380         0.744387     7.070971e-06    0.998868
+                                tfidf_readability        0.063385       0.251764       0.063591      0.252173   0.128169   0.027074    0.164541  0.574252         0.761300     4.182897e-06    0.998980

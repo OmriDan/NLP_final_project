@@ -18,15 +18,15 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = T5ForConditionalGeneration.from_pretrained(model_name).to(device)
 
 loss_fn = torch.nn.CrossEntropyLoss()
-batch_size = 8
 
 # Load dataframe; adjust the file name/path as needed.
-df = parse_data.load_csv_to_df('./DS_tests_with_difficulty.csv')
+# df = parse_data.load_csv_to_df('./merged_leetcode_df.csv')
+df = parse_data.load_dataset_to_df("NovaSky-AI/labeled_numina_difficulty_162K")
 
 # List to store the computed QA loss for each question-answer pair.
 qa_losses = []
 
-batch_size = 8  # Number of samples to process at once
+batch_size = 16  # Number of samples to process at once
 # Iterate through each row in the dataframe.
 for i in tqdm(range(0, len(df), batch_size), desc="Processing QA pairs"):
     batch = df.iloc[i:i+batch_size]

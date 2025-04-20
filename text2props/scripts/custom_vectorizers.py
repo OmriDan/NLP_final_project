@@ -4,6 +4,7 @@ from gensim.models import KeyedVectors
 from transformers import BertTokenizer, BertModel,AutoTokenizer, AutoModel
 import gensim.downloader as api
 import torch
+from tqdm import tqdm
 
 
 class BERTVectorizer(TransformerMixin):
@@ -28,18 +29,21 @@ class BERTVectorizer(TransformerMixin):
         # No fitting required for pre-trained embeddings
         return self
 
-    def transform(self, X):
+    def transform(self, X, batch_size=24):
         """
         Transforms input text into BERT embeddings.
         :param X: List of text inputs.
         :return: Numpy array of BERT [CLS] token embeddings.
         """
         embeddings = []
-        for text in X:
-            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding="max_length", max_length=512).to(self.device)
+        for i in tqdm(range(0, len(X), batch_size), desc="Processing batches"):
+            batch_texts = X[i:i + batch_size].tolist()
+            inputs = self.tokenizer(batch_texts, return_tensors="pt", truncation=True, padding=True, max_length=512).to(self.device)
+            inputs = {key: val.to(self.device) for key, val in inputs.items()}
             with torch.no_grad():
                 outputs = self.model(**inputs)
-            embeddings.append(outputs.last_hidden_state[:, 0, :].cpu().numpy())  # CLS token
+            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()  # CLS token
+            embeddings.append(batch_embeddings)
         return np.vstack(embeddings)
 
 
@@ -65,20 +69,21 @@ class CodeBERTVectorizer(TransformerMixin):
         # No fitting required for pre-trained embeddings
         return self
 
-    def transform(self, X):
+    def transform(self, X, batch_size=24):
         """
         Transforms input text into CodeBERT embeddings.
         :param X: List of text inputs.
         :return: Numpy array of CodeBERT [CLS] token embeddings.
         """
         embeddings = []
-        for text in X:
-            if self.preprocessor:
-                text = self.preprocessor(text)
-            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512).to(self.device)
+        for i in tqdm(range(0, len(X), batch_size), desc="Processing batches"):
+            batch_texts = X[i:i + batch_size].tolist()
+            inputs = self.tokenizer(batch_texts, return_tensors="pt", truncation=True, padding=True, max_length=512).to(self.device)
+            inputs = {key: val.to(self.device) for key, val in inputs.items()}
             with torch.no_grad():
                 outputs = self.model(**inputs)
-            embeddings.append(outputs.last_hidden_state[:, 0, :].cpu().numpy())  # CLS token
+            batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()  # CLS token
+            embeddings.append(batch_embeddings)
         return np.vstack(embeddings)
 
     

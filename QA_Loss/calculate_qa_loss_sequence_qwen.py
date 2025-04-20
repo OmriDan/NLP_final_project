@@ -4,6 +4,10 @@ from regression import run_regression
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import pandas as pd
 from tqdm import tqdm
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.svm import SVR
 
 # Set device and model parameters.
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -20,12 +24,13 @@ model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
 loss_fn = torch.nn.CrossEntropyLoss()
 
 # Load your DataFrame.
-df = parse_data.load_csv_to_df("./DS_tests_with_difficulty.csv")
+# df = parse_data.load_csv_to_df("./DS_tests_with_difficulty.csv")
+df = parse_data.load_dataset_to_df("NovaSky-AI/labeled_numina_difficulty_162K")
 
 # List to store computed QA losses.
 qa_losses = []
 
-batch_size = 2  # Number of samples to process at once
+batch_size = 4  # Number of samples to process at once
 # Process the DataFrame in batches.
 for i in tqdm(range(0, len(df), batch_size), desc="Processing QA pairs"):
     batch = df.iloc[i:i+batch_size]
@@ -74,4 +79,4 @@ df['loss'] = qa_losses
 df.to_csv("qa_loss_qwen.csv", index=False)
 
 # Run the regression
-run_regression("qa_loss_qwen.csv", "Qwen")
+run_regression("qa_loss_qwen.csv", "Qwen", estimator=RandomForestRegressor, estimator_params={'max_depth': 5, 'n_estimators': 250})

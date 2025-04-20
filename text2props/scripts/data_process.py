@@ -16,7 +16,6 @@ data = []
 for file_path in metric_files:
     with open(file_path, "rb") as f:
         metrics = pickle.load(f)
-
     # Create a flat dictionary for each experiment.
     flat_record = {
         "experiment": metrics.get("experiment", ""),
