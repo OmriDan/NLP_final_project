@@ -5,6 +5,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, Trai
 from transformers import DataCollatorWithPadding, pipeline
 import numpy as np
 import pandas as pd
+from transformers.trainer_callback import EarlyStoppingCallback
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -90,7 +91,7 @@ def train_and_evaluate_model(model_name, filtered_dataset):
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
     # Define model save path
-    model_save_path = f"text_classification/text_classifications_models/{model_name.replace('/', '_')}_leetcode"
+    model_save_path = f"text_classification/text_classifications_models/{model_name.replace('/', '_')}_leetcode_no_rag"
 
     # Define training arguments
     training_args = TrainingArguments(
@@ -98,12 +99,13 @@ def train_and_evaluate_model(model_name, filtered_dataset):
         learning_rate=2e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
-        num_train_epochs=5,
+        num_train_epochs=10,
         weight_decay=0.01,
         evaluation_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         report_to="none",  # Disable wandb reporting
+        metric_for_best_model="f1_macro",
     )
 
     # Initialize trainer
@@ -115,6 +117,7 @@ def train_and_evaluate_model(model_name, filtered_dataset):
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
 
     # Train the model
@@ -144,14 +147,11 @@ filtered_leetcode_df = leetcode_df.filter(lambda example: example["difficulty"] 
 
 # List of models to test
 models_to_test = [
-    "distilbert-base-uncased",  # Small and fast
-    "bert-base-uncased",  # Classic BERT
-    "microsoft/deberta-v3-small",  # DeBERTa (better performance than BERT)
-    "roberta-base",  # Improved BERT variant
-    "microsoft/mpnet-base",  # MPNet architecture
-    # More resource-intensive options (uncomment if needed)
-    # "albert-base-v2",             # Parameter-efficient model
-    # "microsoft/deberta-v3-base",  # Strong performance but more resource-intensive
+    "roberta-large",  # Large RoBERTa variant (355M parameters)
+    "bert-large-uncased",  # Large BERT variant (345M parameters)
+    "distilbert-base-uncased",  # Small and fast (66M parameters)
+    "bert-base-uncased",  # Classic BERT (110M parameters)
+    "roberta-base",  # Improved BERT variant (125M parameters)
 ]
 
 # Store results for comparison
