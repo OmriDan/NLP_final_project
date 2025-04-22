@@ -6,6 +6,8 @@ import nltk
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
+from torch.cuda.amp import autocast
+import csv
 
 # Download tokenizer models
 nltk.download('punkt')
@@ -13,8 +15,13 @@ nltk.download('punkt')
 # Model setup
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model_name = "google/flan-t5-base"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = T5ForConditionalGeneration.from_pretrained(model_name).to(device)
+# tokenizer = AutoTokenizer.from_pretrained(model_name)
+# model = T5ForConditionalGeneration.from_pretrained(model_name).to(device)
+# TEST: loading model with mixed precision inference
+model = T5ForConditionalGeneration.from_pretrained(model_name, torch_dtype=torch.float16).to(device).half()
+tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+model.eval()
+
 loss_fn = torch.nn.CrossEntropyLoss()
 print(f"CUDA available: {torch.cuda.is_available()}")
 print(f"Using device: {torch.cuda.get_device_name(0)}")
@@ -35,12 +42,18 @@ def compute_losses(df_subset, batch_size=24):
 
         for j in range(len(batch)):
             num_tokens = torch.count_nonzero(labels[j] != tokenizer.pad_token_id)
-            good_logit = logits[j][:num_tokens]
-            good_label = labels[j][:num_tokens]
-            qa_losses.append(loss_fn(good_logit, good_label).item())
+            if num_tokens <= 0:
+                # Assign NaN for empty generations
+                qa_losses.append(float('nan'))
+            else:
+                good_logit = logits[j][:num_tokens]
+                good_label = labels[j][:num_tokens]
+                qa_losses.append(loss_fn(good_logit, good_label).item())
 
     df_out = df_subset.copy()
     df_out['loss'] = qa_losses
+    mean_loss = df_out['loss'].mean()
+    df_out['loss'] = df_out['loss'].fillna(mean_loss)  # Fill NaN with mean loss
     return df_out
 
 
@@ -61,8 +74,8 @@ def process_and_regress(dataset_type, source, dataset_name, estimator_params={'m
     train_loss = compute_losses(train_df)
     test_loss = compute_losses(test_df)
 
-    train_loss.to_csv(f"qa_losses_Flan-T5_{dataset_name}_train.csv", index=False)
-    test_loss.to_csv(f"qa_losses_Flan-T5_{dataset_name}_test.csv", index=False)
+    train_loss.to_csv(f"qa_losses_Flan-T5_{dataset_name}_train.csv", quoting=csv.QUOTE_MINIMAL, escapechar="\\", index=False)
+    test_loss.to_csv(f"qa_losses_Flan-T5_{dataset_name}_test.csv", quoting=csv.QUOTE_MINIMAL, escapechar="\\", index=False)
 
     run_regression(
         dataset_name=f"Flan-T5_{dataset_name}",
@@ -73,6 +86,6 @@ def process_and_regress(dataset_type, source, dataset_name, estimator_params={'m
     )
 
 if __name__ == "__main__":
-    process_and_regress('csv', 'DS_tests_with_difficulty.csv', 'DS')
-    process_and_regress('csv', 'merged_leetcode_df.csv', 'Leetcode')
+    #process_and_regress('csv', 'DS_tests_with_difficulty.csv', 'DS')
+    #process_and_regress('csv', 'merged_leetcode_df.csv', 'Leetcode')
     process_and_regress('dataset', 'NovaSky-AI/labeled_numina_difficulty_162K', 'NovaSky')
