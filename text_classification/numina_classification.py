@@ -1,5 +1,6 @@
 import os
 import re
+import wandb
 import evaluate
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
@@ -27,13 +28,13 @@ def precompute_rag_retrievals(problems, solutions, retriever, k=3):
     return precomputed_retrievals
 
 class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
-    def __init__(self, problems, solutions, labels, tokenizer, precomputed_retrievals=None, retriever=None, k=3):
+    def __init__(self, problems, solutions, labels, tokenizer, retriever,precomputed_retrievals, k=5):
         self.problems = problems
         self.solutions = solutions
         self.labels = labels
         self.tokenizer = tokenizer
         self.retriever = retriever
-        self.precomputed_retrievals = precomputed_retrievals
+        self.precomputed_retrievals = None
         self.k = k
 
     def __len__(self):
@@ -43,92 +44,19 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
         problem = self.problems[idx]
         solution = self.solutions[idx]
 
-        safe_max_length = min(512, self.tokenizer.model_max_length)
+        # Retrieve relevant context
+        query = f"{problem} {solution}"
+        retrieved_docs = self.retriever.retrieve(query, k=self.k)
+        context = " ".join([doc.page_content for doc in retrieved_docs])
 
-        # Create classification-specific prompt for NovaSky-AI math problems dataset
-        task_prompt = (
-            "Task: Classify this mathematical problem's difficulty on a scale from 1 to 10.\n\n"
-            "Difficulty Scale Guide:\n"
-            "- Level 1-2: Very easy problems requiring only basic arithmetic and simple calculations\n"
-            "- Level 3-4: Easy problems using elementary algebra, geometry, or number theory concepts\n"
-            "- Level 5-6: Medium difficulty requiring multiple mathematical concepts or standard techniques\n"
-            "- Level 7-8: Challenging problems at AMC level requiring insight and mathematical maturity\n"
-            "- Level 9-10: Very difficult problems at olympiad level requiring deep mathematical knowledge and creativity\n\n"
-            "Evaluation factors: conceptual depth, solution complexity, required background knowledge, insight needed"
-        )
-
-        # Step 1: First prioritize the problem (highest priority)
-        problem_text = f"Problem: {problem}"
-        problem_encoding = self.tokenizer(
-            problem_text,
-            truncation=True,
-            max_length=safe_max_length // 2,
-            return_length=True
-        )
-        problem_length = problem_encoding["length"][0]
-        problem_truncated = self.tokenizer.decode(
-            problem_encoding["input_ids"],
-            skip_special_tokens=True
-        )
-
-        # Step 2: Allocate tokens for the solution (second priority)
-        remaining_tokens = safe_max_length - problem_length - 2
-        solution_text = f"Solution: {solution}"
-        solution_encoding = self.tokenizer(
-            solution_text,
-            truncation=True,
-            max_length=remaining_tokens // 3,
-            return_length=True
-        )
-        solution_length = solution_encoding["length"][0]
-        solution_truncated = self.tokenizer.decode(
-            solution_encoding["input_ids"],
-            skip_special_tokens=True
-        )
-
-        # Step 3: Retrieve context and allocate remaining tokens
-        query = f"Problem:{problem} Solution:{solution}"
-        retrieved_docs = self.precomputed_retrievals[idx] if self.precomputed_retrievals else self.retriever(query, k=self.k)
-        formatted_examples = []
-
-        for i, doc in enumerate(retrieved_docs):
-            content = doc.page_content
-            # Case-insensitive replacements using regex
-            content = re.sub(r'(?i)problem:', "Example question:", content)
-            content = re.sub(r'(?i)solution:', "Example answer:", content)
-            formatted_examples.append(f"Reference #{i + 1}: {content}")
-
-        context = "\n".join(formatted_examples)
-        context_text = f"SIMILAR EXAMPLES (FOR REFERENCE ONLY):\n{context}\n"
-        # Calculate remaining tokens, including space for the task prompt
-        prompt_encoding = self.tokenizer(task_prompt, return_length=True)
-        prompt_length = prompt_encoding["length"][0]
-
-        # Use remaining tokens for context
-        remaining_tokens = safe_max_length - problem_length - solution_length - prompt_length - 5
-        context_encoding = self.tokenizer(
-            context_text,
-            truncation=True,
-            max_length=remaining_tokens,
-            return_length=True
-        )
-        context_truncated = self.tokenizer.decode(
-            context_encoding["input_ids"],
-            skip_special_tokens=True
-        )
-
-        # Combine components with task prompt first for better instruction following
-        text = (f"{task_prompt}\n\n{context_truncated}\n\n"
-                f"**EVALUATE THIS PROBLEM**\n{problem_truncated}\n{solution_truncated}\n"
-                f"**END OF PROBLEM TO EVALUATE**")
-        # Final encoding
-        encodings = self.tokenizer(
-            text,
-            truncation=True,
-            padding="max_length",
-            max_length=safe_max_length,
-            return_tensors="pt"
-        )
+        # Format input with context, problem, and solution
+        text = (f"Classify the difficulty of this Problem, Solution pair: "
+                f"Problem: {problem} Solution: {solution}"
+                f"**END OF PAIR**"
+                f"Additional Context: {context}")
+        # Tokenize
+        encodings = self.tokenizer(text, truncation=True, padding="max_length",
+                                   max_length=512, return_tensors="pt")
 
         # Convert to appropriate format
         item = {key: val.squeeze(0) for key, val in encodings.items()}
@@ -194,8 +122,6 @@ def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_ret
     label2id = {str(i + 1): i for i in range(10)}
 
     # Load metrics
-    accuracy = evaluate.load("accuracy")
-    f1 = evaluate.load("f1")
     """Train and evaluate a classification model with optional RAG retrievals"""
     print(f"\n===== Training model: {model_name} =====")
     print(f"Using RAG: {use_rag}")
@@ -233,6 +159,7 @@ def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_ret
             )
         train_dataset = tokenized_dataset["train"]
         val_dataset = tokenized_dataset["validation"]
+    run_name = f"{model_name.replace('/', '_')}_{'rag' if use_rag else 'no_rag'}"
 
     # Create model for classification (10 classes)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -240,8 +167,7 @@ def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_ret
     )
 
     # Define model save path
-    model_save_path = f"difficulty_classification/models/{model_name.replace('/', '_')}_rag"
-
+    model_save_path = f"difficulty_classification/models/numina_{model_name.replace('/', '_')}_rag_{use_rag}"
     # Define training arguments
     training_args = TrainingArguments(
         output_dir=model_save_path,
@@ -253,7 +179,8 @@ def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_ret
         evaluation_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
-        metric_for_best_model="f1_macro",
+        metric_for_best_model="eval_f1_weighted",
+        report_to='none',
         greater_is_better=True,
     )
 
@@ -319,38 +246,26 @@ def main(use_rag=True):
 
 # Small models to test
     small_models = [
-        # "BAAI/bge-small-en-v1.5",       # Small BGE embedding model. less relevant for classification
-        # "sentence-transformers/all-MiniLM-L6-v2",  # Compact sentence transformer needs import modification
-        # "cross-encoder/ms-marco-MiniLM-L-6-v2",    # QA-specific small model needs import modification
-        # "facebook/bart-base",           # Smaller BART model for text understanding
-
-        "distilbert-base-uncased",  # Small and fast
-        "google/mobilebert-uncased",  # Very small and fast
-        "microsoft/deberta-v3-small",  # DeBERTa small
-        "prajjwal1/bert-tiny",  # Tiny BERT (4 layers) bad results (keep)
+        "distilbert-base-uncased",  # Small and fast (66M parameters)
+        "roberta-base",  # Improved BERT variant (125M parameters)
+        "bert-base-uncased",  # Classic BERT (110M parameters)
     ]
 
     # Large models to test
     large_models = [
-        # "BAAI/bge-large-en-v1.5",  # Large BGE embedding model. less relevant for classification
-        # "sentence-transformers/all-mpnet-base-v2",  # Strong sentence transformer. less relevant for classification
-        # "facebook/bart-large",  # Good for text understanding too large
-        # "google/electra-large-discriminator",  # Strong discriminator model. very bad results
-        # "bert-large-uncased",  # Larger BERT
-        # "roberta-large",  # Larger RoBERTa
-        # "microsoft/deberta-v3-base",  # Base DeBERTa
-        # "microsoft/deberta-v3-large",  # Large DeBERTa
+        "bert-large-uncased",  # Large BERT variant (345M parameters)
+        "roberta-large",  # Large RoBERTa variant (355M parameters)
     ]
 
     knowledge_corpus = []
     programming_datasets = [
-        ("codeparrot/apps", "train[:500]"),                      # Works correctly
-        ("open-r1/OpenR1-Math-220k", "train[:500]"),
-        ("sciq", "train[:500]"),                               # Alternative science dataset
-        ("NeelNanda/pile-10k", "train[:500]"),  # Smaller subset of Pile, faster loading
-        ("miike-ai/mathqa", "train[:500]"),  # Math QA dataset without config needs
-        ("squad_v2", "train[:500]"),  # Well-maintained QA dataset
-        ("nlile/hendrycks-MATH-benchmark", "train[:500]"), # Math problems across various subjects
+        # ("codeparrot/apps", "train[:500]"),                      # Works correctly
+        # ("open-r1/OpenR1-Math-220k", "train[:500]"),
+        # ("sciq", "train[:500]"),                               # Alternative science dataset
+        # ("NeelNanda/pile-10k", "train[:500]"),  # Smaller subset of Pile, faster loading
+        # ("miike-ai/mathqa", "train[:500]"),  # Math QA dataset without config needs
+        # ("squad_v2", "train[:500]"),  # Well-maintained QA dataset
+        # ("nlile/hendrycks-MATH-benchmark", "train[:500]"), # Math problems across various subjects
     ]
 
     for dataset_name, split in programming_datasets:
@@ -396,7 +311,8 @@ def main(use_rag=True):
 
     # Store results
     all_results = {}
-    for model_name in small_models + large_models:
+    os.makedirs("numina_temporal_results", exist_ok=True)
+    for model_name in large_models + small_models:
         try:
             results, model_path = train_and_evaluate_model(
                 model_name,
@@ -411,6 +327,9 @@ def main(use_rag=True):
                 "path": model_path,
                 "size": model_size
             }
+            # Save the current all_results to a text file
+            with open(f"numina_temporal_results/all_results_{model_name.replace('/', '_')}_rag_{use_rag}.txt", "w") as f:
+                f.write(str(all_results))
         except Exception as e:
             print(f"Error training {model_name}: {e}")
 
@@ -465,4 +384,4 @@ def main(use_rag=True):
     print(f"\nBest model: {best_model['model']} (F1 Macro: {best_model['f1_macro']:.4f})")
 
 if __name__ == "__main__":
-    main(use_rag=True)
+    main(use_rag=False)
