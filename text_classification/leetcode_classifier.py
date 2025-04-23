@@ -16,7 +16,7 @@ from transformers.trainer_callback import EarlyStoppingCallback
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.schema import Document
-
+from RAG.retriever import RAGRetriever
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Define label mappings
@@ -25,24 +25,6 @@ label2id = {"easy": 0, "medium": 1, "hard": 2}
 
 # Load accuracy metric
 accuracy = evaluate.load("accuracy")
-
-
-class RAGRetriever:
-    def __init__(self, documents, embedding_model="BAAI/bge-large-en-v1.5"):
-        self.documents = documents
-        self.embedding_model = embedding_model
-        self._build_index()
-
-    def _build_index(self):
-        embeddings = HuggingFaceEmbeddings(model_name=self.embedding_model)
-        self.vectorstore = FAISS.from_documents(
-            [Document(page_content=doc) for doc in self.documents],
-            embeddings
-        )
-
-    def retrieve(self, query, k=3):
-        docs = self.vectorstore.similarity_search(query, k=k)
-        return [doc.page_content for doc in docs]
 
 
 def prepare_knowledge_corpus(dataset_name=None, split=None):
@@ -180,8 +162,8 @@ def train_and_evaluate_model(model_name, filtered_dataset, train_retrievals=None
     training_args = TrainingArguments(
         output_dir=model_save_path,
         learning_rate=2e-5,
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
+        per_device_train_batch_size=2,
+        per_device_eval_batch_size=2,
         num_train_epochs=10,
         weight_decay=0.01,
         eval_strategy="epoch",
@@ -238,7 +220,7 @@ def main(use_rag=False):
         # "distilbert-base-uncased",  # Small and fast (66M parameters)
         # "bert-base-uncased",  # Classic BERT (110M parameters)
         # "roberta-base",  # Improved BERT variant (125M parameters)
-        "answerdotai/ModernBERT-base",  # (110M parameters)
+        # "answerdotai/ModernBERT-base",  # (110M parameters)
         # "bert-large-uncased",  # Large BERT variant (345M parameters)
         # "roberta-large",  # Large RoBERTa variant (355M parameters)
         "answerdotai/ModernBERT-large",  # Large variant of ModernBERT (355M parameters)
