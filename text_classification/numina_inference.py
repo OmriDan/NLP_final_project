@@ -11,6 +11,7 @@ from RAG.retriever import RAGRetriever
 
 def load_knowledge_corpus():
     """Load knowledge corpus from datasets used in training"""
+    # [Existing code remains unchanged]
     knowledge_corpus = []
 
     # Programming datasets (same as used in numina_classification)
@@ -46,22 +47,53 @@ def load_knowledge_corpus():
     return knowledge_corpus
 
 
-def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16):
-    """Run inference using a fine-tuned Numina classification model"""
-    # Set up the transformers pipeline
+def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16, difficulty_mode='numeric'):
+    """Run inference using a fine-tuned Numina classification model
+
+    Args:
+        model_folder: Path to the model folder
+        csv_path: Path to CSV with problem, solution and difficulty columns
+        use_rag: Whether to use retrieval augmented generation
+        batch_size: Batch size for inference
+        difficulty_mode: 'numeric' for 1-10 scale or 'categorical' for easy/medium/hard
+    """
+    # Set up the model and tokenizer
     print(f"Loading model from {model_folder}")
-    classifier = pipeline(
-        "text-classification",
-        model=model_folder,
-        device=0 if 'cuda' in [str(it).lower() for it in range(0, 8)] else -1
-    )
+
+    try:
+        model_abs_path = os.path.abspath(model_folder)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_abs_path,
+            local_files_only=True
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_abs_path,
+            local_files_only=True
+        )
+
+        classifier = pipeline(
+            "text-classification",
+            model=model,
+            tokenizer=tokenizer,
+            device=0 if 'cuda' in [str(it).lower() for it in range(0, 8)] else -1
+        )
+
+    except Exception as e:
+        print(f"Error loading model: {e}")
+        raise
 
     # Get tokenizer for RAG context preparation
     tokenizer = AutoTokenizer.from_pretrained(model_folder)
 
-    # Map numeric labels (0-9) to difficulty levels (1-10)
-    id2label = {i: str(i + 1) for i in range(10)}
-    label2id = {str(i + 1): i - 1 for i in range(1, 11)}
+    # Define label mappings based on difficulty mode
+    if difficulty_mode == 'numeric':
+        # For numeric mode (1-10)
+        id2label = {i: str(i + 1) for i in range(10)}
+        label2id = {str(i + 1): i for i in range(1, 11)}
+    else:
+        # For categorical mode (easy, medium, hard)
+        id2label = {0: 'easy', 1: 'medium', 2: 'hard'}
+        label2id = {'easy': 0, 'medium': 1, 'hard': 2}
 
     # Load data
     print(f"Loading data from {csv_path}")
@@ -100,7 +132,12 @@ def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16):
         results.extend(batch_results)
 
     # Extract predictions and scores
-    predicted_labels = [int(res['label'].split('_')[-1]) for res in results]
+    if difficulty_mode == 'numeric':
+        predicted_labels = [int(res['label'].split('_')[-1]) for res in results]
+    else:
+        # For categorical model, we need to map the label IDs to category names
+        predicted_labels = [int(label2id[res['label']]) for res in results]
+
     confidence_scores = [res['score'] for res in results]
 
     # Create results dataframe
@@ -115,42 +152,60 @@ def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16):
             if pd.isna(label):
                 true_labels.append(None)
             else:
-                # Handle integer or string input
-                try:
-                    numeric_label = int(float(label))
-                    # Numina model expects 0-9 for 1-10
-                    true_labels.append(numeric_label - 1)
-                except:
-                    true_labels.append(None)
+                if difficulty_mode == 'numeric':
+                    # Handle integer input (expected 1-10 in data, model expects 0-9)
+                    try:
+                        numeric_label = int(float(label))
+                        # Convert to 0-9 range for comparing with model output
+                        true_labels.append(numeric_label - 1)
+                    except:
+                        true_labels.append(None)
+                else:
+                    # Handle categorical input (expected 'easy', 'medium', 'hard')
+                    try:
+                        if isinstance(label, str) and label.lower() in label2id:
+                            true_labels.append(label.lower())
+                        else:
+                            true_labels.append(None)
+                    except:
+                        true_labels.append(None)
 
         # Filter out None values
         valid_indices = [i for i, label in enumerate(true_labels) if label is not None]
-        filtered_true = [true_labels[i] for i in valid_indices]
+        filtered_true = [label2id[true_labels[i]] for i in valid_indices]
         filtered_pred = [predicted_labels[i] for i in valid_indices]
 
         if filtered_true:
             # Calculate metrics
-            # Convert to 1-10 for reporting
-            display_true = [l + 1 for l in filtered_true]
-            display_pred = [l for l in filtered_pred]
+            if difficulty_mode == 'numeric':
+                # For display, convert back to 1-10
+                display_true = [l + 1 for l in filtered_true]
+                display_pred = [l for l in filtered_pred]
+                target_names = [f"Difficulty {i}" for i in range(1, 11)]
+            else:
+                display_true = filtered_true
+                display_pred = filtered_pred
+                target_names = ['easy', 'medium', 'hard']
 
             acc = accuracy_score(filtered_true, filtered_pred)
-            f1_macro = f1_score(filtered_true, filtered_pred, average="macro")
-            f1_weighted = f1_score(filtered_true, filtered_pred, average="weighted")
+            f1_macro = f1_score(filtered_true, filtered_pred, average="macro", labels=list(set(filtered_true)))
+            f1_weighted = f1_score(filtered_true, filtered_pred, average="weighted", labels=list(set(filtered_true)))
 
             print("\nPerformance Metrics:")
+            print(f"Difficulty Mode: {difficulty_mode}")
             print(f"Accuracy: {acc:.4f}")
             print(f"F1 Macro: {f1_macro:.4f}")
             print(f"F1 Weighted: {f1_weighted:.4f}")
 
             # Add detailed classification report
             print("\nClassification Report:")
-            target_names = [f"Difficulty {i}" for i in range(1, 11)]
             print(classification_report(filtered_true, filtered_pred,
-                                        target_names=target_names))
+                                        target_names=target_names,
+                                        labels=list(set(filtered_true))))
 
             # Store metrics
             metrics = {
+                "difficulty_mode": difficulty_mode,
                 "accuracy": acc,
                 "f1_macro": f1_macro,
                 "f1_weighted": f1_weighted
@@ -158,10 +213,10 @@ def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16):
 
             # Save metrics to a separate file
             metrics_df = pd.DataFrame([metrics])
-            metrics_df.to_csv(f"metrics_{os.path.basename(csv_path)}_rag_{use_rag}.csv", index=False)
+            metrics_df.to_csv(f"metrics_{os.path.basename(csv_path)}_{difficulty_mode}_rag_{use_rag}.csv", index=False)
 
     # Save predictions to CSV
-    output_path = f"predictions_{os.path.basename(csv_path)}_rag_{use_rag}.csv"
+    output_path = f"predictions_{os.path.basename(csv_path)}_{difficulty_mode}_rag_{use_rag}.csv"
     results_df.to_csv(output_path, index=False)
     print(f"Predictions saved to {output_path}")
 
@@ -170,20 +225,33 @@ def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run inference with Numina classification models")
-    parser.add_argument("--model_folder", required=True,
+    parser.add_argument("--model_folder", type=str,
                         help="Path to the fine-tuned model folder")
-    parser.add_argument("--csv_path", required=True,
+    parser.add_argument("--csv_path", type=str,
                         help="Path to CSV with problem, solution and difficulty columns")
     parser.add_argument("--use_rag", action="store_true",
                         help="Enable RAG for inference")
     parser.add_argument("--batch_size", type=int, default=16,
                         help="Batch size for processing")
+    parser.add_argument("--difficulty_mode", type=str, choices=['numeric', 'categorical'],
+                        help="Difficulty scale: 'numeric' for 1-10 or 'categorical' for easy/medium/hard")
 
     args = parser.parse_args()
+
+    # Default values for development
+    if not args.model_folder:
+        args.model_folder = r'/media/omridan/data/work/msc/NLP/NLP_final_project/text_classification/text_classification/text_classifications_models/leetcode_no_rag/answerdotai_ModernBERT-base_leetcode_no_rag'
+    if not args.csv_path:
+        args.csv_path = r'/media/omridan/data/work/msc/NLP/NLP_final_project/data/CS_course/DS_tests_with_difficulty_categorical.csv'
+    if not args.batch_size:
+        args.batch_size = 4
+    if not args.difficulty_mode:
+        args.difficulty_mode = 'categorical'
 
     predict_difficulty(
         model_folder=args.model_folder,
         csv_path=args.csv_path,
         use_rag=args.use_rag,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        difficulty_mode=args.difficulty_mode
     )
