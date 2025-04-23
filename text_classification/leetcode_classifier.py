@@ -1,24 +1,84 @@
 import os
 import evaluate
-from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
-from transformers import DataCollatorWithPadding, pipeline
+import torch
 import numpy as np
 import pandas as pd
+from datasets import load_dataset
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    TrainingArguments,
+    Trainer,
+    DataCollatorWithPadding,
+    pipeline
+)
 from transformers.trainer_callback import EarlyStoppingCallback
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain.schema import Document
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-# Load the CSV dataset
-leetcode_df = load_dataset("csv",
-                           data_files="/media/omridan/data/work/msc/NLP/NLP_final_project/data/leetcode/classification_leetcode_df.csv")
-
-# Define label mappings for the three classes
+# Define label mappings
 id2label = {0: "easy", 1: "medium", 2: "hard"}
 label2id = {"easy": 0, "medium": 1, "hard": 2}
 
 # Load accuracy metric
 accuracy = evaluate.load("accuracy")
+
+
+class RAGRetriever:
+    def __init__(self, documents, embedding_model="BAAI/bge-large-en-v1.5"):
+        self.documents = documents
+        self.embedding_model = embedding_model
+        self._build_index()
+
+    def _build_index(self):
+        embeddings = HuggingFaceEmbeddings(model_name=self.embedding_model)
+        self.vectorstore = FAISS.from_documents(
+            [Document(page_content=doc) for doc in self.documents],
+            embeddings
+        )
+
+    def retrieve(self, query, k=3):
+        docs = self.vectorstore.similarity_search(query, k=k)
+        return [doc.page_content for doc in docs]
+
+
+def prepare_knowledge_corpus(dataset_name=None, split=None):
+    """Load and prepare documents for the knowledge corpus"""
+    if dataset_name and split:
+        try:
+            dataset = load_dataset(dataset_name, split=split)
+            corpus = []
+
+            # Handle different dataset formats
+            if "text" in dataset.column_names:
+                corpus.extend(dataset["text"])
+            elif "question" in dataset.column_names and "answer" in dataset.column_names:
+                corpus.extend([f"Q: {q} A: {a}" for q, a in zip(dataset["question"], dataset["answer"])])
+            elif "content" in dataset.column_names:
+                corpus.extend(dataset["content"])
+            elif "code" in dataset.column_names:
+                corpus.extend(dataset["code"])
+            elif "instruction" in dataset.column_names and "output" in dataset.column_names:
+                corpus.extend([f"{inst} {out}" for inst, out in zip(dataset["instruction"], dataset["output"])])
+
+            return corpus
+        except Exception as e:
+            print(f"Error loading dataset {dataset_name}: {e}")
+            return []
+    return []
+
+
+def precompute_rag_retrievals(problems, solutions, retriever, k=3):
+    """Precompute RAG retrievals for the dataset"""
+    retrievals = []
+    for problem, solution in zip(problems, solutions):
+        query = f"Question: {problem} Answer: {solution}"
+        retrieved_docs = retriever.retrieve(query, k=k)
+        retrievals.append(retrieved_docs)
+    return retrievals
 
 
 def compute_metrics(eval_pred):
@@ -45,16 +105,23 @@ def compute_metrics(eval_pred):
     return results
 
 
-def preprocess_function(examples, tokenizer):
+def preprocess_function(examples, tokenizer, retrievals=None, use_rag=False):
     # Combine question and answer into a single text
-    texts = [f"Question: {q} Answer: {a}" for q, a in zip(examples["content"], examples["python"])]
+    texts = []
+    for i, (q, a) in enumerate(zip(examples["content"], examples["python"])):
+        if use_rag and retrievals and i < len(retrievals):
+            # Add retrieval context
+            context = " ".join(retrievals[i])
+            text = f"Context: {context} Question: {q} Answer: {a}"
+        else:
+            text = f"Question: {q} Answer: {a}"
+        texts.append(text)
 
     # Map difficulty labels to IDs with None handling
     labels = []
     for label in examples["difficulty"]:
         if label is None:
             print(f"Warning: Found None difficulty label, using default")
-            # Assign a default label or you could choose to skip this example
             labels.append(0)  # Default to "easy"
         else:
             labels.append(label2id[label.lower()])
@@ -66,21 +133,36 @@ def preprocess_function(examples, tokenizer):
     return tokenized
 
 
-def train_and_evaluate_model(model_name, filtered_dataset):
+def train_and_evaluate_model(model_name, filtered_dataset, train_retrievals=None, val_retrievals=None, use_rag=False):
     """Train and evaluate a model from a given checkpoint"""
-    print(f"\n===== Training model: {model_name} =====")
+    print(f"\n===== Training model: {model_name} with RAG={use_rag} =====")
 
     # Load tokenizer for the specific model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+    # Create train/test split
+    split_dataset = filtered_dataset["train"].train_test_split(test_size=0.2)
+
     # Tokenize and prepare the dataset with the specific tokenizer
-    tokenized_dataset = filtered_dataset.map(
-        lambda examples: preprocess_function(examples, tokenizer),
+    train_dataset = split_dataset["train"].map(
+        lambda examples: preprocess_function(
+            examples,
+            tokenizer,
+            retrievals=train_retrievals if use_rag else None,
+            use_rag=use_rag
+        ),
         batched=True
     )
 
-    # Create train/test split
-    tokenized_dataset = tokenized_dataset["train"].train_test_split(test_size=0.2)
+    val_dataset = split_dataset["test"].map(
+        lambda examples: preprocess_function(
+            examples,
+            tokenizer,
+            retrievals=val_retrievals if use_rag else None,
+            use_rag=use_rag
+        ),
+        batched=True
+    )
 
     # Create model for 3-class classification
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -91,7 +173,8 @@ def train_and_evaluate_model(model_name, filtered_dataset):
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
     # Define model save path
-    model_save_path = f"text_classification/text_classifications_models/{model_name.replace('/', '_')}_leetcode_no_rag"
+    rag_suffix = "_rag" if use_rag else "_no_rag"
+    model_save_path = f"text_classification/text_classifications_models/{model_name.replace('/', '_')}_leetcode{rag_suffix}"
 
     # Define training arguments
     training_args = TrainingArguments(
@@ -101,7 +184,7 @@ def train_and_evaluate_model(model_name, filtered_dataset):
         per_device_eval_batch_size=16,
         num_train_epochs=10,
         weight_decay=0.01,
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         report_to="none",  # Disable wandb reporting
@@ -112,8 +195,8 @@ def train_and_evaluate_model(model_name, filtered_dataset):
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=tokenized_dataset["train"],
-        eval_dataset=tokenized_dataset["test"],
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
@@ -142,54 +225,143 @@ def train_and_evaluate_model(model_name, filtered_dataset):
     return eval_results, model_save_path
 
 
-# Filter out entries with None difficulty
-filtered_leetcode_df = leetcode_df.filter(lambda example: example["difficulty"] is not None)
+def main(use_rag=False):
+    # Load the CSV dataset
+    leetcode_df = load_dataset("csv",
+                               data_files="/media/omridan/data/work/msc/NLP/NLP_final_project/data/leetcode/classification_leetcode_df.csv")
 
-# List of models to test
-models_to_test = [
-    "roberta-large",  # Large RoBERTa variant (355M parameters)
-    "bert-large-uncased",  # Large BERT variant (345M parameters)
-    "distilbert-base-uncased",  # Small and fast (66M parameters)
-    "bert-base-uncased",  # Classic BERT (110M parameters)
-    "roberta-base",  # Improved BERT variant (125M parameters)
-]
+    # Filter out entries with None difficulty
+    filtered_leetcode_df = leetcode_df.filter(lambda example: example["difficulty"] is not None)
 
-# Store results for comparison
-all_results = {}
+    # List of models to test
+    models_to_test = [
+        # "distilbert-base-uncased",  # Small and fast (66M parameters)
+        # "bert-base-uncased",  # Classic BERT (110M parameters)
+        # "roberta-base",  # Improved BERT variant (125M parameters)
+        "answerdotai/ModernBERT-base",  # (110M parameters)
+        # "bert-large-uncased",  # Large BERT variant (345M parameters)
+        # "roberta-large",  # Large RoBERTa variant (355M parameters)
+        "answerdotai/ModernBERT-large",  # Large variant of ModernBERT (355M parameters)
+    ]
 
-# Train and evaluate each model
-for model_name in models_to_test:
-    try:
-        results, model_path = train_and_evaluate_model(model_name, filtered_leetcode_df)
-        all_results[model_name] = {
-            "metrics": results,
-            "path": model_path
-        }
-    except Exception as e:
-        print(f"Error training {model_name}: {e}")
+    knowledge_corpus = []
 
-# Print comparison of all models
-print("\n===== MODEL COMPARISON =====")
-comparison_data = []
-for model_name, result in all_results.items():
-    metrics = result["metrics"]
-    comparison_data.append({
-        "model": model_name,
-        "accuracy": metrics.get("eval_accuracy", "N/A"),
-        "f1_macro": metrics.get("eval_f1_macro", "N/A"),
-        "f1_easy": metrics.get("eval_f1_easy", "N/A"),
-        "f1_medium": metrics.get("eval_f1_medium", "N/A"),
-        "f1_hard": metrics.get("eval_f1_hard", "N/A")
-    })
+    # Programming datasets
+    programming_datasets = [
+        ("codeparrot/apps", "train[:2000]"),  # Programming problems
+        ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
+        ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
+        ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
+    ]
 
-    print(f"{model_name}:")
-    print(f"  Accuracy: {metrics.get('eval_accuracy', 'N/A'):.4f}")
-    print(f"  F1-macro: {metrics.get('eval_f1_macro', 'N/A'):.4f}")
-    print(f"  F1-easy: {metrics.get('eval_f1_easy', 'N/A'):.4f}")
-    print(f"  F1-medium: {metrics.get('eval_f1_medium', 'N/A'):.4f}")
-    print(f"  F1-hard: {metrics.get('eval_f1_hard', 'N/A'):.4f}")
+    # CS knowledge and QA datasets
+    cs_qa_datasets = [
+        ("squad", "train[:4000]"),  # General QA format
+        ("Kaeyze/computer-science-synthetic-dataset", "train[:6000]"),  # CS-specific QA
+        ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
+        ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
+    ]
 
-# Save results to CSV for easier comparison
-results_df = pd.DataFrame(comparison_data)
-results_df.to_csv("classification_comparison.csv", index=False)
-print(f"Comparison results saved to classification_comparison.csv")
+    # Only load datasets if RAG is enabled
+    if use_rag:
+        for dataset_name, split in programming_datasets + cs_qa_datasets:
+            print(f"Loading dataset: {dataset_name}")
+            dataset_corpus = prepare_knowledge_corpus(dataset_name=dataset_name, split=split)
+            knowledge_corpus.extend(dataset_corpus)
+        print(f'Length of knowledge corpus: {len(knowledge_corpus)}')
+
+        # Precompute retrievals
+        retrievals_file = "leetcode_precomputed_retrievals.pt"
+        if os.path.exists(retrievals_file):
+            print(f"Loading precomputed retrievals from {retrievals_file}...")
+            torch.serialization.add_safe_globals([Document])
+            retrievals_data = torch.load(retrievals_file)
+            train_retrievals = retrievals_data["train"]
+            val_retrievals = retrievals_data["val"]
+        else:
+            # Create retriever once
+            print('Creating retriever...')
+            retriever = RAGRetriever(knowledge_corpus, embedding_model="BAAI/bge-large-en-v1.5")
+
+            # Split dataset for precomputing retrievals
+            split_data = filtered_leetcode_df["train"].train_test_split(test_size=0.2)
+
+            # Precompute retrievals for training and validation sets
+            print("Precomputing retrievals for training set...")
+            train_retrievals = precompute_rag_retrievals(
+                problems=split_data["train"]["content"],
+                solutions=split_data["train"]["python"],
+                retriever=retriever,
+                k=3
+            )
+
+            print("Precomputing retrievals for validation set...")
+            val_retrievals = precompute_rag_retrievals(
+                problems=split_data["test"]["content"],
+                solutions=split_data["test"]["python"],
+                retriever=retriever,
+                k=3
+            )
+
+            # Save retrievals to disk
+            print(f"Saving precomputed retrievals to {retrievals_file}...")
+            torch.save({"train": train_retrievals, "val": val_retrievals}, retrievals_file)
+    else:
+        train_retrievals = None
+        val_retrievals = None
+
+    # Store results
+    all_results = {}
+    os.makedirs("leetcode_temporal_results", exist_ok=True)
+
+    for model_name in models_to_test:
+        try:
+            results, model_path = train_and_evaluate_model(
+                model_name,
+                filtered_leetcode_df,
+                train_retrievals,
+                val_retrievals,
+                use_rag=use_rag,
+            )
+            all_results[model_name] = {
+                "metrics": results,
+                "path": model_path
+            }
+            # Save the current all_results to a text file
+            with open(f"leetcode_temporal_results/all_results_{model_name.replace('/', '_')}_rag_{use_rag}.txt",
+                      "w") as f:
+                f.write(str(all_results))
+        except Exception as e:
+            print(f"Error training {model_name}: {e}")
+
+    # Print comparison of all models
+    print("\n===== MODEL COMPARISON =====")
+    comparison_data = []
+    for model_name, result in all_results.items():
+        metrics = result["metrics"]
+        comparison_data.append({
+            "model": model_name,
+            "model_path": result["path"],
+            "rag": "Yes" if use_rag else "No",
+            "accuracy": metrics.get("eval_accuracy", "N/A"),
+            "f1_macro": metrics.get("eval_f1_macro", "N/A"),
+            "f1_easy": metrics.get("eval_f1_easy", "N/A"),
+            "f1_medium": metrics.get("eval_f1_medium", "N/A"),
+            "f1_hard": metrics.get("eval_f1_hard", "N/A")
+        })
+
+        print(f"{model_name}:")
+        print(f"  Accuracy: {metrics.get('eval_accuracy', 'N/A'):.4f}")
+        print(f"  F1-macro: {metrics.get('eval_f1_macro', 'N/A'):.4f}")
+        print(f"  F1-easy: {metrics.get('eval_f1_easy', 'N/A'):.4f}")
+        print(f"  F1-medium: {metrics.get('eval_f1_medium', 'N/A'):.4f}")
+        print(f"  F1-hard: {metrics.get('eval_f1_hard', 'N/A'):.4f}")
+
+    # Save results to CSV
+    results_df = pd.DataFrame(comparison_data)
+    results_df.to_csv(f"classification_comparison_rag_{use_rag}.csv", index=False)
+    print(f"Comparison results saved to classification_comparison_rag_{use_rag}.csv")
+
+
+if __name__ == "__main__":
+    main(use_rag=False)  # Set to True to enable RAG, False to disable
