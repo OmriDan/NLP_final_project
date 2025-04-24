@@ -19,7 +19,7 @@ from langchain_core.documents.base import Document
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
-def precompute_rag_retrievals(problems, solutions, retriever, k=3):
+def precompute_rag_retrievals(problems, solutions, retriever, k=2):
     precomputed_retrievals = []
     for problem, solution in tqdm(zip(problems, solutions)):
         query = f"Problem:{problem} Solution:{solution}"
@@ -27,15 +27,19 @@ def precompute_rag_retrievals(problems, solutions, retriever, k=3):
         precomputed_retrievals.append(retrieved_docs)
     return precomputed_retrievals
 
+
 class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
-    def __init__(self, problems, solutions, labels, tokenizer, retriever,precomputed_retrievals, k=5):
+    def __init__(self, problems, solutions, labels, tokenizer, precomputed_retrievals=None, k=3, retriever=None):
         self.problems = problems
         self.solutions = solutions
         self.labels = labels
         self.tokenizer = tokenizer
         self.retriever = retriever
-        self.precomputed_retrievals = None
+        self.precomputed_retrievals = precomputed_retrievals
         self.k = k
+
+        if precomputed_retrievals is None and retriever is None:
+            raise ValueError("Either precomputed_retrievals or retriever must be provided")
 
     def __len__(self):
         return len(self.problems)
@@ -44,25 +48,30 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
         problem = self.problems[idx]
         solution = self.solutions[idx]
 
-        # Retrieve relevant context
-        query = f"{problem} {solution}"
-        retrieved_docs = self.retriever.retrieve(query, k=self.k)
-        context = " ".join([doc.page_content for doc in retrieved_docs])
+        # Get retrieved context
+        if self.precomputed_retrievals is not None:
+            retrieved_docs = self.precomputed_retrievals[idx]
+        else:
+            query = f"{problem} {solution}"
+            retrieved_docs = self.retriever.retrieve(query, k=self.k)
 
-        # Format input with context, problem, and solution
-        text = (f"Classify the difficulty of this Problem, Solution pair: "
-                f"Problem: {problem} Solution: {solution}"
-                f"**END OF PAIR**"
-                f"Additional Context: {context}")
-        # Tokenize
-        encodings = self.tokenizer(text, truncation=True, padding="max_length",
-                                   max_length=512, return_tensors="pt")
+        # Process context with dynamic allocation based on this specific problem+solution
+        instructions = f"Classify the difficulty of the following problem-solution pair. "
+        problem_solution = f"Problem: {problem} Solution: {solution} "
+        fixed_text = instructions + problem_solution + "Additional Context: "
 
-        # Convert to appropriate format
-        item = {key: val.squeeze(0) for key, val in encodings.items()}
-        item["labels"] = torch.tensor(self.labels[idx])
-
-        return item
+        # Calculate available tokens
+        # fixed_tokens = len(self.tokenizer.encode(fixed_text))
+        # Get context from retrieved documents
+        context = " ".join([doc.page_content for doc in retrieved_docs[:1]])
+        # Create final text
+        text = instructions + problem_solution + "**END OF PAIR** Additional Context: " + context
+        # total_tokens = len(self.tokenizer.encode(text))
+        # Tokenize with truncation as a fallback
+        encodings = self.tokenizer(text, truncation=True, max_length=2048)
+        # Add labels directly to the encodings dictionary
+        encodings["labels"] = torch.tensor(self.labels[idx])
+        return encodings
 
 
 def compute_metrics(eval_pred):
@@ -110,13 +119,13 @@ def preprocess_function(examples, tokenizer):
     difficulties = [min(9, max(0, d)) for d in difficulties]
 
     # Tokenize the texts
-    tokenized = tokenizer(texts, truncation=True, padding="max_length", max_length=512)
+    tokenized = tokenizer(texts, truncation=True, max_length=1024)
     tokenized["labels"] = difficulties
 
     return tokenized
 
 
-def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_retrievals=None, use_rag=True):
+def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_retrievals=None, use_rag=True, weights=None):
     # Define label mappings (1-10 difficulty levels)
     id2label = {i: str(i + 1) for i in range(10)}
     label2id = {str(i + 1): i for i in range(10)}
@@ -159,7 +168,6 @@ def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_ret
             )
         train_dataset = tokenized_dataset["train"]
         val_dataset = tokenized_dataset["validation"]
-    run_name = f"{model_name.replace('/', '_')}_{'rag' if use_rag else 'no_rag'}"
 
     # Create model for classification (10 classes)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -168,24 +176,40 @@ def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_ret
 
     # Define model save path
     model_save_path = f"difficulty_classification/models/numina_{model_name.replace('/', '_')}_rag_{use_rag}"
+
+    class WeightedLossTrainer(Trainer):
+        def __init__(self, weight=None, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.weight = weight
+
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+            # Added **kwargs to handle extra parameters like num_items_in_batch
+            labels = inputs.pop("labels")
+            outputs = model(**inputs)
+            logits = outputs.logits
+            loss_fct = torch.nn.CrossEntropyLoss(weight=self.weight)
+            loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+            return (loss, outputs) if return_outputs else loss
+
     # Define training arguments
     training_args = TrainingArguments(
         output_dir=model_save_path,
         learning_rate=2e-5,
-        per_device_train_batch_size=8,
-        per_device_eval_batch_size=8,
+        per_device_train_batch_size=2,
+        per_device_eval_batch_size=2,
         num_train_epochs=6,
         weight_decay=0.01,
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
-        metric_for_best_model="eval_f1_weighted",
+        metric_for_best_model="eval_f1_macro",
         report_to='none',
         greater_is_better=True,
     )
 
     # Initialize trainer
-    trainer = Trainer(
+    trainer = WeightedLossTrainer(
+        weight=weights,
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -221,21 +245,37 @@ def train_and_evaluate_model(model_name, dataset, train_retrievals=None, val_ret
 
 def main(use_rag=True):
     print("Loading dataset...")
-    novadata = load_dataset("NovaSky-AI/labeled_numina_difficulty_859K")
     # Define the number of samples you want
-    N = 50000  # Your desired sample size
-    total_size = len(novadata["train"])
-    sample_percentage = N / total_size
+    N = 800000  # Your desired sample size
 
-    # Load random subset directly
+    # First load the dataset
     sampled_dataset = load_dataset(
         "NovaSky-AI/labeled_numina_difficulty_859K",
-        split=f"train[:{N}]"
+        split=f"train[:]"
     )
 
+    # Then filter based on length criteria
+    filtered_dataset = sampled_dataset.filter(
+        lambda example: (
+                example["problem"] is not None and
+                example["solution"] is not None and
+                len(example["problem"]) < 1500 and
+                len(example["solution"]) < 1500
+        )
+    )
 
+    # Continue with the filtered dataset instead of the original
+    splits = filtered_dataset.train_test_split(test_size=0.2, seed=42)
+
+    # Calculate class weights inversely proportional to frequency
+    counts = dict(filtered_dataset.to_pandas()["gpt_difficulty_parsed"].value_counts())
+    total_samples = sum(counts.values())
+    # Convert to 0-indexed for the model
+    class_weights = {i - 1: total_samples / (count * len(counts)) for i, count in counts.items()}
+
+    # Convert to tensor for loss function
+    weight = torch.tensor([class_weights[i] for i in range(10)], dtype=torch.float32).to('cuda')
     # Create a validation split
-    splits = sampled_dataset.train_test_split(test_size=0.2, seed=42)
     sampled_data_dict = {
         "train": splits["train"],
         "validation": splits["test"]
@@ -246,26 +286,28 @@ def main(use_rag=True):
 
 # Small models to test
     small_models = [
-        "distilbert-base-uncased",  # Small and fast (66M parameters)
-        "roberta-base",  # Improved BERT variant (125M parameters)
-        "bert-base-uncased",  # Classic BERT (110M parameters)
+        "answerdotai/ModernBERT-base" #(110M parameters)
+        # "distilbert-base-uncased",  # Small and fast (66M parameters)
+        # "roberta-base",  # Improved BERT variant (125M parameters)
+        # "bert-base-uncased",  # Classic BERT (110M parameters)
     ]
 
     # Large models to test
     large_models = [
-        "bert-large-uncased",  # Large BERT variant (345M parameters)
-        "roberta-large",  # Large RoBERTa variant (355M parameters)
+        # "bert-large-uncased",  # Large BERT variant (345M parameters)
+        # "roberta-large",  # Large RoBERTa variant (355M parameters)
+        "answerdotai/ModernBERT-large",  # Large variant of ModernBERT (355M parameters)
     ]
 
     knowledge_corpus = []
     programming_datasets = [
-        # ("codeparrot/apps", "train[:500]"),                      # Works correctly
-        # ("open-r1/OpenR1-Math-220k", "train[:500]"),
-        # ("sciq", "train[:500]"),                               # Alternative science dataset
-        # ("NeelNanda/pile-10k", "train[:500]"),  # Smaller subset of Pile, faster loading
-        # ("miike-ai/mathqa", "train[:500]"),  # Math QA dataset without config needs
-        # ("squad_v2", "train[:500]"),  # Well-maintained QA dataset
-        # ("nlile/hendrycks-MATH-benchmark", "train[:500]"), # Math problems across various subjects
+        ("codeparrot/apps", "train[:500]"),                      # Works correctly
+        ("open-r1/OpenR1-Math-220k", "train[:500]"),
+        ("sciq", "train[:500]"),                               # Alternative science dataset
+        ("NeelNanda/pile-10k", "train[:500]"),  # Smaller subset of Pile, faster loading
+        ("miike-ai/mathqa", "train[:500]"),  # Math QA dataset without config needs
+        ("squad_v2", "train[:500]"),  # Well-maintained QA dataset
+        ("nlile/hendrycks-MATH-benchmark", "train[:500]"), # Math problems across various subjects
     ]
 
     for dataset_name, split in programming_datasets:
@@ -320,6 +362,7 @@ def main(use_rag=True):
                 train_retrievals,
                 val_retrievals,
                 use_rag=use_rag,
+                weights=weight,
             )
             model_size = "Small" if model_name in small_models else "Large"
             all_results[model_name] = {
