@@ -3,6 +3,28 @@ from datasets import load_dataset
 
 
 def load_csv_to_df(filename: str) -> pd.DataFrame:
+    """
+    Parse a CSV file into a standardized DataFrame for QA difficulty tasks.
+
+    Supports two CSV schema types:
+      1) Columns: ['title', 'difficulty', 'content', 'python', 'Acceptance_rate',
+         'Topic_tags', 'normalized_difficulty']
+      2) Columns: ['question_type', 'points', 'question_translated_to_English',
+         'multiple_choice_answer', 'answer_translated_to_English', 'Difficulty', 'source_file']
+
+    Args:
+        filename (str): Path to the input CSV file matching one of the supported schemas.
+
+    Returns:
+        pd.DataFrame: DataFrame with columns:
+            - question_type (str): 'open question' or multiple choice labels.
+            - question_text (str): Text of the question.
+            - answer_text (str): Ground-truth answer text.
+            - difficulty (float): Difficulty score (normalized if provided).
+
+    Raises:
+        ValueError: If the CSV structure does not match any supported schema.
+    """
     # Read the CSV file
     df = pd.read_csv(filename)
 
@@ -53,22 +75,33 @@ def load_csv_to_df(filename: str) -> pd.DataFrame:
 
 def load_dataset_to_df(dataset_name: str) -> pd.DataFrame:
     """
-    Load the Hugging Face dataset and convert to a DataFrame with columns:
-      - question_type
-      - question_text
-      - answer_text
-      - difficulty
-    Any rows with invalid difficulty (-1) or missing question/answer will be dropped.
+    Load a Hugging Face dataset and convert to a standardized DataFrame.
+
+    Fetches the specified dataset, selects the 'train' split or first available,
+    filters out invalid or missing entries, and normalizes difficulty to [0,1].
+
+    Args:
+        dataset_name (str): Name or path of the HF dataset (e.g., 'NovaSky-AI/...').
+
+    Returns:
+        pd.DataFrame: DataFrame with columns:
+            - question_type (str): Always 'open question'.
+            - question_text (str): Problem description as string.
+            - answer_text (str): Solution text as string.
+            - difficulty (float): Normalized difficulty in [0,1].
+
+    Raises:
+        KeyError: If no valid difficulty column is found in the dataset.
     """
-    # 1. Load the HF dataset (assumes a single split, e.g. 'train')
+    # Load the dataset
     ds = load_dataset(dataset_name)
     split = "train" if "train" in ds else next(iter(ds))
     hf = ds[split]
 
-    # 2. Convert to pandas
+    # Convert to pandas
     df = hf.to_pandas()
 
-    # 3. Filter out any rows where difficulty is invalid
+    # Filter out any rows where difficulty is invalid
     if "gpt_difficulty_parsed" in df:
         df = df[df["gpt_difficulty_parsed"] != -1]
         diff_col = "gpt_difficulty_parsed"
@@ -78,15 +111,18 @@ def load_dataset_to_df(dataset_name: str) -> pd.DataFrame:
     else:
         raise KeyError("Could not find a difficulty column in the dataset.")
 
-    # 4. Drop any rows missing question or answer text
+    # Drop any rows missing question or answer text
     df = df.dropna(subset=["problem", "solution"])
 
-    # 5. Build the new DataFrame in the "correct format"
+    # Build the new DataFrame in the "correct format"
     out = pd.DataFrame({
         "question_type": "open question",
         "question_text": df["problem"].astype(str),
         "answer_text":   df["solution"].astype(str),
         "difficulty":    df[diff_col].astype(float),
     })
+
+    # Normalize difficulty to be between 0 and 1
+    out['difficulty'] = (out['difficulty'].astype(float) - 1.0) / 9.0
 
     return out

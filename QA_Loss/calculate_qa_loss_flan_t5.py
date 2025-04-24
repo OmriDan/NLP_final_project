@@ -8,15 +8,17 @@ from sklearn.ensemble import RandomForestRegressor
 from tqdm import tqdm
 import nltk
 
+# FAIRLY CERTAIN THIS FILE DOES NOT WORK PROPERLY
+
 # Download NLTK tokenizer data
 nltk.download('punkt')
 
 # Model and tokenizer setup
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model_name = "google/flan-t5-base"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
 # Load model in half precision for faster inference
-model = T5ForConditionalGeneration.from_pretrained(model_name).to(device).half()
+model = T5ForConditionalGeneration.from_pretrained(model_name, torch_dtype=torch.float16).to(device).half()
 model.eval()
 torch.backends.cudnn.benchmark = True
 
@@ -122,8 +124,8 @@ def process_and_regress(dataset_type, source, dataset_name,
 def main():
     # Orchestrate for multiple datasets
     datasets = {
-        'DS':      ('csv',     'DS_tests_with_difficulty.csv'),
-        'Leetcode':('csv',     'merged_leetcode_df.csv'),
+        #'DS':      ('csv',     'DS_tests_with_difficulty.csv'),
+        #'Leetcode':('csv',     'merged_leetcode_df.csv'),
         'NovaSky': ('dataset', 'NovaSky-AI/labeled_numina_difficulty_162K'),
     }
     for name, (dtype, src) in datasets.items():

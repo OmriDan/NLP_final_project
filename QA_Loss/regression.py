@@ -20,18 +20,26 @@ def run_regression(
     test_df: pd.DataFrame = None,
 ) -> None:
     """
-    Run regression on the given dataset.
+    Train and evaluate regression models on loss vs. difficulty data.
 
-    If `train_df` and `test_df` are provided, they are used directly.
-    Otherwise, the function loads and splits from `filename`.
+    Loads or accepts train/test splits, fits a provided estimator or performs
+    grid search over multiple model types, and saves evaluation metrics.
 
-    :param dataset_name: Identifier used for output metrics filename.
-    :param estimator: A scikit-learn regressor class to use directly (e.g., RandomForestRegressor).
-    :param estimator_params: Dict of parameters to initialize the estimator.
-    :param filename: Optional path to CSV data file with 'loss' and 'difficulty' columns.
-    :param train_df: Optional training DataFrame.
-    :param test_df: Optional testing DataFrame.
+    Args:
+        dataset_name (str): Identifier for output filenames and logs.
+        estimator (type, optional): A regressor class (e.g., RandomForestRegressor). Defaults to None.
+        estimator_params (dict, optional): Initialization parameters for the estimator. Defaults to None.
+        filename (str, optional): CSV path with 'loss' and 'difficulty' columns. Required if train_df/test_df not provided.
+        train_df (pd.DataFrame, optional): Pre-split training data. Defaults to None.
+        test_df (pd.DataFrame, optional): Pre-split testing data. Defaults to None.
+
+    Raises:
+        ValueError: If neither filename nor both train_df and test_df are provided.
+
+    Returns:
+        None: Prints metrics and writes a metrics CSV.
     """
+    # Load or split data
     if train_df is None or test_df is None:
         if filename is None:
             raise ValueError("Either filename or both train_df and test_df must be provided.")
@@ -42,12 +50,13 @@ def run_regression(
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42
         )
-    else:
+    else:   # Use provided splits
         X_train = train_df[['loss']]
         y_train = train_df['difficulty']
         X_test = test_df[['loss']]
         y_test = test_df['difficulty']
 
+    # If a single estimator is given, train and evaluate it directly
     if estimator is not None:
         print(f"Training with provided estimator: {estimator.__name__}")
         reg = estimator(**(estimator_params or {}))
@@ -69,6 +78,7 @@ def run_regression(
         metrics_df.to_csv(f"metrics_{dataset_name}.csv", index=False)
         return
 
+    # Otherwise, evaluate multiple models via grid search
     models_to_evaluate = [
         RandomForestRegressor(),
         DecisionTreeRegressor(),
@@ -97,8 +107,8 @@ def run_regression(
             'regressor__degree': [1, 2, 3, 4]
         }
     ]
-
     best_models = {}
+    # Grid search over each model
     for model, params, name in zip(models_to_evaluate, parameters_for_model_evaluation, model_names):
         print(f"Training and tuning {name}...")
         pipeline = Pipeline([
