@@ -58,7 +58,6 @@ class RAGAugmentedClassificationDataset(torch.utils.data.Dataset):
         # Process context with dynamic allocation based on this specific problem+solution
         instructions = f"Classify the difficulty of the following problem-solution pair. "
         problem_solution = f"Problem: {problem} Solution: {solution} "
-        fixed_text = instructions + problem_solution + "Additional Context: "
 
         # Calculate available tokens
         # fixed_tokens = len(self.tokenizer.encode(fixed_text))
@@ -427,4 +426,4 @@ def main(use_rag=True):
     print(f"\nBest model: {best_model['model']} (F1 Macro: {best_model['f1_macro']:.4f})")
 
 if __name__ == "__main__":
-    main(use_rag=False)
+    main(use_rag=True)
