@@ -12,11 +12,11 @@ def main():
     pytorch_lightning.utilities.seed.seed_everything(42)
     # Wandb configuration
     wandb_project = "rag-difficulty-regressor"
-    wandb_run_name = "rag-training-run-1"
+    wandb_run_name = "modernBERT-base-embedding"
 
     # Load your data
-    train_df = pd.read_csv("./data/leetcode/leetcode_train.csv")
-    valid_df = pd.read_csv("./data/leetcode/leetcode_val.csv")
+    train_df = pd.read_csv("/media/omridan/data/work/msc/NLP/NLP_final_project/data/leetcode/leetcode_train.csv")
+    valid_df = pd.read_csv("/media/omridan/data/work/msc/NLP/NLP_final_project/data/leetcode/leetcode_val.csv")
 
     # Enhanced knowledge corpus with CS and programming datasets
     knowledge_corpus = []
@@ -30,17 +30,18 @@ def main():
 
     # Add programming-specific datasets
     programming_datasets = [
-        ("codeparrot/apps", "train[:2000]"),  # Programming problems
-        ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
-        ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
-        ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
+        ("codeparrot/apps", "train[:200]"),  # Programming problems
+        ("codeparrot/github-jupyter-code-to-text", "train[:200]"),  # Code documentation
+        ("open-r1/verifiable-coding-problems-python-10k", "train[:200]"),  # Python exercises
+        ("sahil2801/CodeAlpaca-20k", "train[:100]"),  # Code instruction data
     ]
 
     # Add CS knowledge and QA datasets
     cs_qa_datasets = [
-        ("squad", "train[:4000]"),  # General QA format
-        ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
-        ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
+        ("squad", "train[:200]"),  # General QA format
+        ("Kaeyze/computer-science-synthetic-dataset", "train[:300]"),  # CS-specific QA
+        ("habedi/stack-exchange-dataset", "train[:200]"),  # CS-specific QA from Stack Exchange
+        ("ajibawa-2023/WikiHow", "train[:100]"),  # Step-by-step guides
     ]
 
     # Combine all datasets
@@ -70,7 +71,7 @@ def main():
         train_df,
         valid_df,
         knowledge_corpus,
-        model_name="microsoft/deberta-v3-large",
+        model_name="answerdotai/ModernBERT-base",
         embedding_model_name=embedding_model_name,
         wandb_project=wandb_project,
         wandb_run_name=wandb_run_name
@@ -104,16 +105,31 @@ def inference_demo(model_dir=None):
         with open(artifacts_path, "rb") as f:
             model_artifacts = pickle.load(f)
 
-        # Example question and answer
-        question = "How to print 'hello'?"
-        answer = "print('hello')"
-        # Predict difficulty
-        result = predict_difficulty_with_rag(question, answer, model_artifacts)
+        # Example questions to test
+        test_questions = [
+            "Print Hello World in Python.",
+            "Write a function to find the maximum subarray sum.",
+            "Implement a function to check if a string is a palindrome.",
+            "Create a function to find the nth Fibonacci number using dynamic programming.",
+            "Implement a depth-first search algorithm for a graph."
+        ]
+        # Example answers
+        test_answers = [
+            "print('Hello World')",
+            "def max_subarray_sum(arr): return max(sum(arr[i:j]) for i in range(len(arr)) for j in range(i+1, len(arr)+1))",
+            "def is_palindrome(s): return s == s[::-1]",
+            "def fibonacci(n): if n <= 1: return n; return fibonacci(n-1) + fibonacci(n-2)",
+            "def dfs(graph, start): visited = set(); stack = [start]; while stack: vertex = stack.pop(); if vertex not in visited: visited.add(vertex); stack.extend(set(graph[vertex]) - visited)"
+        ]
+        for i in range(len(test_questions)):
+            question = test_questions[i]
+            answer = test_answers[i]
+            result = predict_difficulty_with_rag(question, answer, model_artifacts)
 
-        print(f"Question: {question}")
-        print(f"Answer: {answer}")
-        print(f"Difficulty Score: {result['difficulty_score']:.2f}")
-        print(f"Explanation: {result['explanation']}")
+            print(f"Question: {question}")
+            print(f"Answer: {answer}")
+            print(f"Difficulty Score: {result['difficulty_score']:.2f}")
+            # print(f"Explanation: {result['explanation']}")
 
     except FileNotFoundError:
         print(f"Model artifacts not found. Please check the path: {model_dir}")

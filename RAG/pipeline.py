@@ -57,18 +57,40 @@ class CustomWandbCallback(TrainerCallback):
             wandb.run.summary["total_steps"] = state.global_step
 
 
-
 class R2MonitorCallback(TrainerCallback):
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        if metrics is not None and "eval_r2" in metrics:
-            # Log to console
-            print(f"Eval R2: {metrics['eval_r2']:.4f}")
+        if metrics is None or "eval_r2" not in metrics:
+            return control
 
-            # Update best R2 in summary
-            if wandb.run is not None:
-                if "best_r2" not in wandb.run.summary or metrics["eval_r2"] > wandb.run.summary["best_r2"]:
-                    wandb.run.summary["best_r2"] = metrics["eval_r2"]
+        # Log to console
+        print(f"Eval R2: {metrics['eval_r2']:.4f}")
 
+        # Update best R2 in summary
+        if wandb.run is not None:
+            try:
+                # Safely check and update best R2
+                current_r2 = metrics["eval_r2"]
+                best_r2 = None
+
+                try:
+                    # Use .get() method with default instead of direct access
+                    best_r2 = wandb.run.summary.get("best_r2", -float('inf'))
+                except Exception as e:
+                    print(f"Warning: Could not access best_r2 in wandb summary: {e}")
+                    best_r2 = -float('inf')
+
+                if best_r2 is None or current_r2 > best_r2:
+                    try:
+                        # Set summary value
+                        wandb.run.summary["best_r2"] = current_r2
+                        print(f"New best R2: {current_r2:.4f}")
+                    except Exception as e:
+                        print(f"Warning: Could not update best_r2 in wandb summary: {e}")
+
+            except Exception as e:
+                print(f"Error in R2 monitoring: {e}")
+
+        return control
 
 def compute_metrics(eval_preds):
     # Handle the complex output structure from the model
@@ -140,6 +162,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
     })
 
     # Step 1: Prepare the RAG retriever with the knowledge corpus
+    print('Preparing RAG retriever...')
     retriever = RAGRetriever(knowledge_corpus, embedding_model=embedding_model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     base_model = AutoModel.from_pretrained(model_name)
@@ -151,7 +174,7 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
         labels=train_df['difficulty'].tolist(),
         tokenizer=tokenizer,
         retriever=retriever,
-        k=5
+        k=1
     )
 
     valid_dataset = RAGAugmentedDataset(
@@ -170,19 +193,19 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
     training_args = TrainingArguments(
         gradient_accumulation_steps=2,
         output_dir=output_dir,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=100,
         learning_rate=3e-6,  # Reduced from 2e-5
         max_grad_norm=1.0,  # Add gradient clipping
         lr_scheduler_type="linear",  # Changed from cosine
         warmup_ratio=0.01,  # Reduced warmup
-        per_device_train_batch_size=8,
-        per_device_eval_batch_size=8,
+        per_device_train_batch_size=4,
+        per_device_eval_batch_size=4,
         num_train_epochs=15,  # Reduced from 100
         weight_decay=0.02,  # Increased from 0.001
         fp16=True,
         load_best_model_at_end=True,
-        metric_for_best_model="mse",
+        metric_for_best_model="mae",
         greater_is_better=False,
         report_to="wandb",
         logging_steps=50,
@@ -207,9 +230,11 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
     best_mse = round(float(best_metric_value), 4) if best_metric_value is not None else 0.0
 
     # Update model names to include the metric
-    metric_suffix = f"_mse{best_mse}"
-    final_model_dir = os.path.join(model_dir, f"final_model{metric_suffix}")
-    artifacts_path = os.path.join(model_dir, f"difficulty_regressor_artifacts{metric_suffix}.pkl")
+    metric_suffix = f"_mae{best_mse}"
+    best_model_dir = os.path.join(model_dir, f"best_model{metric_suffix}")
+    os.makedirs(best_model_dir, exist_ok=True)
+    trainer.save_model(best_model_dir)
+
 
     # Create wandb directory for model
     wandb_dir = os.path.join("wandb", wandb_run_name + metric_suffix)
@@ -226,14 +251,50 @@ def build_rag_difficulty_regressor(train_df, valid_df, knowledge_corpus, model_n
     artifact.add_dir(final_model_dir)
     wandb.log_artifact(artifact)
 
+    # Save the final model (after all training is complete)
+    final_model_dir = os.path.join(model_dir, "final_model")
+    os.makedirs(final_model_dir, exist_ok=True)
+    trainer.model.save_pretrained(final_model_dir)
+    tokenizer.save_pretrained(final_model_dir)
+    final_artifact = wandb.Artifact(name=f"final-model-{wandb.run.id}", type="model")
+    final_artifact.add_dir(final_model_dir)
+    wandb.log_artifact(final_artifact)
     # Update model_artifacts to include best metric
     model_artifacts = {
         "model": model,
         "tokenizer": tokenizer,
         "retriever": retriever,
-        "best_mse": best_mse
+        "best_mse": best_mse,
+        "best_model_path": best_model_dir,
+        "final_model_path": final_model_dir
     }
+    # Save the final model state as a .pkl file
+    final_model_pkl_path = os.path.join(model_dir, "final_model.pkl")
+    with open(final_model_pkl_path, "wb") as f:
+        pickle.dump({
+            "model_state_dict": trainer.model.state_dict(),
+            "config": trainer.model.config,
+            "tokenizer": tokenizer
+        }, f)
 
+    # Update the model_artifacts dictionary to include the pkl paths
+    model_artifacts.update({
+        "best_model_pkl": best_model_pkl_path,
+        "final_model_pkl": final_model_pkl_path
+    })
+
+    # Save the updated model_artifacts
+    with open(artifacts_path, "wb") as f:
+        pickle.dump(model_artifacts, f)
+
+    # Log both pickle files as artifacts
+    best_pkl_artifact = wandb.Artifact(name=f"best-model-pkl-{wandb.run.id}", type="model")
+    best_pkl_artifact.add_file(best_model_pkl_path)
+    wandb.log_artifact(best_pkl_artifact)
+
+    final_pkl_artifact = wandb.Artifact(name=f"final-model-pkl-{wandb.run.id}", type="model")
+    final_pkl_artifact.add_file(final_model_pkl_path)
+    wandb.log_artifact(final_pkl_artifact)
     # Save artifacts
     with open(artifacts_path, "wb") as f:
         pickle.dump(model_artifacts, f)

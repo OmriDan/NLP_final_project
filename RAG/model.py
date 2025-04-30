@@ -58,8 +58,10 @@ class RAGQuestionDifficultyRegressor(torch.nn.Module):
             weights = torch.where(labels < 0.3, weights * 1.5, weights)
             weights = torch.where(labels > 0.7, weights * 1.5, weights)
 
-            # Weighted MSE loss
-            loss = ((score - labels) ** 2).mean()
+            # MSE loss
+            # loss = ((score - labels) ** 2).mean()
+            # L1 loss
+            loss = torch.abs(score - labels).mean()
 
         # For compatibility with Trainer
         if loss is not None:

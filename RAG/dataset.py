@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset
 
 class RAGAugmentedDataset(Dataset):
-    def __init__(self, questions, answers, retriever, labels=None, tokenizer=None, max_length=512, k=3):
+    def __init__(self, questions, answers, retriever, labels=None, tokenizer=None, max_length=2048, k=3):
         self.questions = questions
         self.answers = answers
         self.labels = labels
@@ -22,19 +22,21 @@ class RAGAugmentedDataset(Dataset):
 
     def _create_augmented_inputs(self):
         augmented_inputs = []
-
         for question, answer in zip(self.questions, self.answers):
             # Retrieve relevant documents
-            retrieved_docs = self.retriever.retrieve(question, k=self.k)
+            retrieved_docs = self.retriever.retrieve(question +" "+answer, k=self.k)
 
             # Extract context from retrieved documents
-            context = " ".join([doc.page_content for doc in retrieved_docs])
-
+            context = " ".join([doc.page_content for doc in retrieved_docs[:self.k]])            # Add structured prompt
+            task_prompt = (
+                "Rate this programming question's difficulty (0.0=easy to 1.0=difficult) based on complexity,"
+                " efficiency, length, knowledge required, and implementation challenges."
+            )
             # Create augmented input
             augmented_input = {
                 "question": question,
                 "answer": answer,
-                "context": context
+                "context": f"{task_prompt}\nRelevant Information:\n{context}"
             }
 
             augmented_inputs.append(augmented_input)
@@ -90,7 +92,7 @@ class RAGAugmentedDataset(Dataset):
             skip_special_tokens=True
         )
 
-        # Step 4: Combine all components in final format
+        # # Step 4: Combine all components in final format
         text = f"{context_truncated} {question_truncated} {answer_truncated}"
 
         # Final encoding
