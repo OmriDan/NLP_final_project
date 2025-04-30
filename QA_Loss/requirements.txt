@@ -1,14 +1,8 @@
-Cython==3.0.12
 datasets==3.5.0
-gensim==4.3.3
 nltk==3.9.1
 numpy==2.2.5
 pandas==2.2.3
-pyirt==0.3.4
 scikit_learn==1.6.1
-scipy==1.15.2
-setuptools==78.1.0
-textstat==0.7.5
 torch==2.5.1+cu121
 tqdm==4.67.1
 transformers==4.51.2
