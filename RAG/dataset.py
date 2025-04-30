@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset
 
 class RAGAugmentedDataset(Dataset):
-    def __init__(self, questions, answers, retriever, labels=None, tokenizer=None, max_length=512, k=3):
+    def __init__(self, questions, answers, retriever, labels=None, tokenizer=None, max_length=2048, k=3):
         self.questions = questions
         self.answers = answers
         self.labels = labels
@@ -22,54 +22,21 @@ class RAGAugmentedDataset(Dataset):
 
     def _create_augmented_inputs(self):
         augmented_inputs = []
-        # Add few-shot examples - these provide calibration points for the model
-        examples = [
-            {"q": "Print 'Hello World'",
-             "a": "print('Hello World')",
-             "diff": 0.1,
-             "reason": "Very basic syntax with no algorithmic complexity"},
-
-            {"q": "Write a function to check if a string is a palindrome",
-             "a": "def is_palindrome(s): return s == s[::-1]",
-             "diff": 0.3,
-             "reason": "Simple algorithm using basic string operations"},
-
-            {"q": "Implement binary search on a sorted array",
-             "a": "def binary_search(arr, target):\n    left, right = 0, len(arr) - 1\n    while left <= right:\n        mid = (left + right) // 2\n        if arr[mid] == target: return mid\n        elif arr[mid] < target: left = mid + 1\n        else: right = mid - 1\n    return -1",
-             "diff": 0.6,
-             "reason": "Medium difficulty with divide-and-conquer approach"},
-
-            {"q": "Implement a balanced binary search tree with insertion and deletion",
-             "a": "class TreeNode:\n    def __init__(self, key):\n        self.left = None\n        self.right = None\n        self.val = key\n\nclass BST:\n    def insert(self, root, key):\n        if root is None:\n            return TreeNode(key)\n        else:\n            if root.val < key:\n                root.right = self.insert(root.right, key)\n            else:\n                root.left = self.insert(root.left, key)\n        return root",
-             "diff": 0.9,
-             "reason": "Complex data structure requiring careful balance maintenance"}
-        ]
-
-        # Create example demonstrations text
-        examples_text = "Example difficulty ratings:\n"
-        for ex in examples:
-            examples_text += f"Question: {ex['q']}\nSolution: {ex['a']}\nDifficulty: {ex['diff']} - {ex['reason']}\n\n"
-
         for question, answer in zip(self.questions, self.answers):
             # Retrieve relevant documents
-            retrieved_docs = self.retriever.retrieve(question, k=self.k)
+            retrieved_docs = self.retriever.retrieve(question +" "+answer, k=self.k)
 
             # Extract context from retrieved documents
-            context = " ".join([doc.page_content for doc in retrieved_docs])
-            # Add structured prompt
+            context = " ".join([doc.page_content for doc in retrieved_docs[:self.k]])            # Add structured prompt
             task_prompt = (
-                "Rate the difficulty of the following programming question on a scale from 0.0 (very easy) to 1.0 (very difficult). "
-                "Consider these factors: algorithm complexity, time/space efficiency, code length, required knowledge, "
-                "and implementation challenges. "
-                "Easy problems (0.0-0.3) typically use basic syntax and simple operations. "
-                "Medium problems (0.3-0.7) require data structures, loops, or standard algorithms. "
-                "Hard problems (0.7-1.0) requires expertise, involve complex algorithms, optimizations, or advanced concepts."
+                "Rate this programming question's difficulty (0.0=easy to 1.0=difficult) based on complexity,"
+                " efficiency, length, knowledge required, and implementation challenges."
             )
             # Create augmented input
             augmented_input = {
                 "question": question,
                 "answer": answer,
-                "context": f"{task_prompt}\n\n{examples_text}\nRelevant Information:\n{context}"
+                "context": f"{task_prompt}\nRelevant Information:\n{context}"
             }
 
             augmented_inputs.append(augmented_input)
@@ -125,7 +92,7 @@ class RAGAugmentedDataset(Dataset):
             skip_special_tokens=True
         )
 
-        # Step 4: Combine all components in final format
+        # # Step 4: Combine all components in final format
         text = f"{context_truncated} {question_truncated} {answer_truncated}"
 
         # Final encoding
