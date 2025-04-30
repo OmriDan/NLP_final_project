@@ -9,7 +9,7 @@ def predict_difficulty_with_rag(question, answer, model_artifacts):
     retriever = model_artifacts["retriever"]
 
     # Retrieve context
-    retrieved_docs = retriever.retrieve(question, k=5)
+    retrieved_docs = retriever.retrieve(question, k=1)
     context_text = " ".join([doc.page_content for doc in retrieved_docs])
 
     # Combine text with a consistent format
@@ -20,7 +20,7 @@ def predict_difficulty_with_rag(question, answer, model_artifacts):
         combined_text,
         return_tensors="pt",
         truncation=True,
-        max_length=512,  # Set a fixed max length
+        max_length=2048,  # Set a fixed max length
         padding="max_length"
     )
 
