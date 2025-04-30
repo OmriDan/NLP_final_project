@@ -1,82 +1,94 @@
-# The *text2props* framework
+# Extensions to the *text2props* Framework
 
-This repository contains the source code of *text2props*, a framework to implement, train and evaluate models to 
-estimate latent traits (e.g. difficulty) of questions from textual information.
-The framework *text2props* was presented in the paper "*Introducing a framework to assess newly created questions with 
-Natural Language Processing*" at the 21st International Conference on Artificial Intelligence in Education 
-([AIED20](https://aied2020.nees.com.br/)).
+This repository extends the [*text2props*](https://github.com/lucabenedetto/text2props) framework, originally developed by [Benedetto et al.](https://doi.org/10.1007/978-3-030-52237-7_4), to enhance question difficulty estimation using custom vectorizers, fine-tuning of transformer-based embeddings, and batch experimentation. These extensions provide new capabilities for analyzing question difficulty across different domains, such as programming and mathematics.
 
-If you use this framework, please cite the related paper:
+- **Link to the original framework**: [*text2props* GitHub Repository](https://github.com/lucabenedetto/text2props).
+- **Link to the original paper**: [Introducing a Framework to Assess Newly Created Questions with Natural Language Processing](https://doi.org/10.1007/978-3-030-52237-7_4).
+
+## Key Features
+- **Custom Vectorizers**: Extended the original vectorization methods with advanced embeddings like BERT, CodeBERT, and word2vec.
+- **Fine-Tuning**: Scripts to fine-tune BERT and CodeBERT embeddings on domain-specific datasets (e.g., NovaSky).
+- **Batch Experiments**: Automates running multiple experiments with different configurations, and saves evaluation metrics.
+- **Data Processing**: Includes utility functions for parsing datasets into the *text2props* required format.
+
+## Installation
+
+To set up the environment for this project:
+
+1. **Create a new virtual environment**:
+   ```bash
+   conda create -n my_project_env python=3.8
+   conda activate my_project_env
+   ```
+
+2. **Install the dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Install the *text2props* framework**:
+   ```bash
+   python setup.py install
+   ```
+
+## Project Structure
+
+- `scripts/`: Contains custom Python scripts for vectorization, fine-tuning, and batch experiments.
+- `text2props/`: The original *text2props* framework and its source code.
+- `requirements.txt`: Lists the dependencies for this project.
+
+## Usage
+
+### Running Fine-Tuning
+
+To fine-tune transformer models (BERT or CodeBERT) on your dataset, run the following command:
+
+```bash
+python scripts/finetune.py
 ```
+
+This script fine-tunes the selected transformer models on the **NovaSky** dataset (or other datasets you have in your `../data/raw/` folder) and saves the fine-tuned models to `../models/`.
+
+### Running Batch Experiments
+
+To run a batch of experiments with various vectorizers (TF-IDF, word2vec, BERT, CodeBERT), and compare different configurations, use:
+
+```bash
+python scripts/difficulty_prediction_batch_experiments.py
+```
+
+This script will:
+- Load the dataset.
+- Process the data using different vectorizers and models.
+- Run the experiments with different pre-processing and fine-tuning options.
+- Output the predictions and evaluation metrics to files.
+
+### Data Format
+
+The data should be formatted as follows:
+
+- **Questions DataFrame**: Contains `[Q_ID, Q_TEXT, CORRECT_TEXTS, WRONG_TEXTS]`.
+- **Answers DataFrame**: Contains `[S_ID, TIMESTAMP, CORRECT, Q_ID]`.
+- **Latent Traits DataFrame**: Contains `[Q_ID, LATENT_TRAIT]`.
+
+You can process your datasets using the utility functions provided in the `parse_data.py` file or use your own data parsing methods.
+
+
+## Citation
+
+If you use this framework in your work, please cite the original *text2props* paper:
+
+```bibtex
 @InProceedings{10.1007/978-3-030-52237-7_4,
-author="Benedetto, Luca
-and Cappelli, Andrea
-and Turrin, Roberto
-and Cremonesi, Paolo",
-editor="Bittencourt, Ig Ibert
-and Cukurova, Mutlu
-and Muldner, Kasia
-and Luckin, Rose
-and Mill{\'a}n, Eva",
-title="Introducing a Framework to Assess Newly Created Questions with Natural Language Processing",
-booktitle="Artificial Intelligence in Education",
-year="2020",
-publisher="Springer International Publishing",
-address="Cham",
-pages="43--54",
-isbn="978-3-030-52237-7"
+  author="Benedetto, Luca and Cappelli, Andrea and Turrin, Roberto and Cremonesi, Paolo",
+  editor="Bittencourt, Ig Ibert and Cukurova, Mutlu and Muldner, Kasia and Luckin, Rose and Mill{'a}n, Eva",
+  title="Introducing a Framework to Assess Newly Created Questions with Natural Language Processing",
+  booktitle="Artificial Intelligence in Education",
+  year="2020",
+  publisher="Springer International Publishing",
+  address="Cham",
+  pages="43--54",
+  isbn="978-3-030-52237-7"
 }
 ```
 
----
-
-The repo is organized as follows:
-
-- `scripts` contains some example scripts and the scripts used to obtain the results presented in the paper
-- `tests` contains the unittests
-- `text2props` contains the source code of the framework, plus a README describing how the framework works
-
----
-
-## How to use
-
-First of all, you have to install the package.
-If you want to do so in a new virtual environment, you can use the following commands:
-
-```
-conda create -n venv-text2props python=3.7 pip
-python setup.py install
-```
-
-Then, you can run the example scripts (no dataset is provided within this repo, though, you have to get your own):
-
-```
-python scripts/example_script.py
-```
-
----
-
-## Data format
-
-Some datasets (not present in this repository) are required to run the scripts.
-The required format is as follows, using the same names as in the `constants.py` file.
-
-* **answers dataframe**: contains the list of interactions between students and questions (i.e. the list of answers
-given by students to the questions). It has the following columns: `[S_ID, TIMESTAMP, CORRECT, Q_ID]`, which are the
-student ID, the timestamp of the interaction, the correctness of the answer, and the question ID.
-
-* **questions dataframe**: contains the textual information for all the questions. It has the following columns:
-`[Q_ID, Q_TEXT, CORRECT_TEXTS, WRONG_TEXTS]`, which are the question ID, the text of the question, the list of the text
-of the correct choices (possibly 1 element long), the list of the texts of the wrong choices
-
-* **questions' latent traits dataframe**: contains the latent traits (if already known) of the questions. It has the
-following columns: `[Q_ID, LATENT_TRAIT]`, which are the question ID and the value of the latent traits.
-
-
----
-
-## Tests
-
-To launch tests:
-
-`python -m unittest discover tests -v`
