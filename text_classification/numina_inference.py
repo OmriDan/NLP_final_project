@@ -1,4 +1,5 @@
 import os
+import torch
 import argparse
 import pandas as pd
 import numpy as np
@@ -11,41 +12,29 @@ from RAG.retriever import RAGRetriever
 
 def load_knowledge_corpus():
     """Load knowledge corpus from datasets used in training"""
-    # [Existing code remains unchanged]
+    from RAG.corpus_utils import prepare_knowledge_corpus
+
     knowledge_corpus = []
 
     # Programming datasets (same as used in numina_classification)
     programming_datasets = [
         ("codeparrot/apps", "train[:500]"),
+        ("open-r1/OpenR1-Math-220k", "train[:500]"),
         ("sciq", "train[:500]"),
+        ("NeelNanda/pile-10k", "train[:500]"),
+        ("miike-ai/mathqa", "train[:500]"),
         ("squad_v2", "train[:500]"),
-        ("nlile/hendrycks-MATH-benchmark", "train[:500]")
+        ("nlile/hendrycks-MATH-benchmark", "train[:500]"),
     ]
 
     # Load and prepare corpus
     for dataset_name, split in tqdm(programming_datasets, desc="Loading datasets"):
-        try:
-            dataset = load_dataset(dataset_name, split=split)
+        print(f"Loading dataset: {dataset_name}")
+        dataset_corpus = prepare_knowledge_corpus(dataset_name=dataset_name, split=split)
+        knowledge_corpus.extend(dataset_corpus)
 
-            # Extract text based on dataset structure
-            if "text" in dataset.column_names:
-                knowledge_corpus.extend(dataset["text"])
-            elif "question" in dataset.column_names and "answer" in dataset.column_names:
-                knowledge_corpus.extend([f"Q: {q} A: {a}" for q, a in zip(dataset["question"], dataset["answer"])])
-            elif "content" in dataset.column_names:
-                knowledge_corpus.extend(dataset["content"])
-            elif "code" in dataset.column_names:
-                knowledge_corpus.extend(dataset["code"])
-            elif "instruction" in dataset.column_names and "output" in dataset.column_names:
-                knowledge_corpus.extend(
-                    [f"{inst} {out}" for inst, out in zip(dataset["instruction"], dataset["output"])])
-
-        except Exception as e:
-            print(f"Error loading {dataset_name}: {e}")
-
-    print(f"Loaded {len(knowledge_corpus)} documents for knowledge corpus")
+    print(f"Length of knowledge corpus: {len(knowledge_corpus)}")
     return knowledge_corpus
-
 
 def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16, difficulty_mode='numeric'):
     """Run inference using a fine-tuned Numina classification model
@@ -75,15 +64,13 @@ def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16, dif
             "text-classification",
             model=model,
             tokenizer=tokenizer,
-            device=0 if 'cuda' in [str(it).lower() for it in range(0, 8)] else -1
+            device= 0 if torch.cuda.is_available() else -1
         )
 
     except Exception as e:
         print(f"Error loading model: {e}")
         raise
 
-    # Get tokenizer for RAG context preparation
-    tokenizer = AutoTokenizer.from_pretrained(model_folder)
 
     # Define label mappings based on difficulty mode
     if difficulty_mode == 'numeric':
@@ -170,10 +157,39 @@ def predict_difficulty(model_folder, csv_path, use_rag=False, batch_size=16, dif
                     except:
                         true_labels.append(None)
 
+        def map_to_three_levels(score):
+            """Map 0-9 difficulty scores to three levels:
+            0-3 -> 1, 4-7 -> 2, 8-9 -> 3"""
+            if 0 <= score <= 2:
+                return 1
+            elif 3 <= score <= 5:
+                return 2
+            else:  # 8-9
+                return 3
+
         # Filter out None values
         valid_indices = [i for i, label in enumerate(true_labels) if label is not None]
-        filtered_true = [label2id[true_labels[i]] for i in valid_indices]
-        filtered_pred = [predicted_labels[i] for i in valid_indices]
+        # Then modify the filtered_true and filtered_pred section
+        if difficulty_mode == 'numeric':
+            # First get the raw 0-indexed integers
+            raw_filtered_true = [true_labels[i] - 1 for i in valid_indices]
+            raw_filtered_pred = [predicted_labels[i] for i in valid_indices]
+
+            # Then map them to the 3-level scale
+            filtered_true = [map_to_three_levels(score) for score in raw_filtered_true]
+            filtered_pred = [map_to_three_levels(score) for score in raw_filtered_pred]
+
+            # Store the original values for reference
+            results_df["original_predicted"] = predicted_labels
+
+            # Update the display logic for metrics
+            display_true = filtered_true
+            display_pred = filtered_pred
+            target_names = ["Level 1 (Easy)", "Level 2 (Medium)", "Level 3 (Hard)"]
+        else:
+            # Categorical mode remains unchanged
+            filtered_true = [label2id[true_labels[i]] for i in valid_indices]
+            filtered_pred = [predicted_labels[i] for i in valid_indices]
 
         if filtered_true:
             # Calculate metrics
@@ -231,7 +247,7 @@ if __name__ == "__main__":
                         help="Path to CSV with problem, solution and difficulty columns")
     parser.add_argument("--use_rag", action="store_true",
                         help="Enable RAG for inference")
-    parser.add_argument("--batch_size", type=int, default=16,
+    parser.add_argument("--batch_size", type=int, default=1,
                         help="Batch size for processing")
     parser.add_argument("--difficulty_mode", type=str, choices=['numeric', 'categorical'],
                         help="Difficulty scale: 'numeric' for 1-10 or 'categorical' for easy/medium/hard")
@@ -240,7 +256,7 @@ if __name__ == "__main__":
 
     # Default values for development
     if not args.model_folder:
-        args.model_folder = r'/media/omridan/data/work/msc/NLP/NLP_final_project/text_classification/text_classification/text_classifications_models/leetcode_no_rag/answerdotai_ModernBERT-base_leetcode_no_rag'
+        args.model_folder = r'/media/omridan/data/work/msc/NLP/NLP_final_project/text_classification/text_classification/text_classifications_models/leetcode_rag/answerdotai_ModernBERT-large_leetcode_rag'
     if not args.csv_path:
         args.csv_path = r'/media/omridan/data/work/msc/NLP/NLP_final_project/data/CS_course/DS_tests_with_difficulty_categorical.csv'
     if not args.batch_size:
@@ -251,7 +267,7 @@ if __name__ == "__main__":
     predict_difficulty(
         model_folder=args.model_folder,
         csv_path=args.csv_path,
-        use_rag=args.use_rag,
+        use_rag=True,
         batch_size=args.batch_size,
         difficulty_mode=args.difficulty_mode
     )
