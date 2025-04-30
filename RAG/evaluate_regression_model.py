@@ -40,6 +40,7 @@ def calculate_prediction_metrics(model_path, csv_path):
     predicted = np.array(predictions)
     mse = mean_squared_error(actual, predicted)
     mae = mean_absolute_error(actual, predicted)
+    rmse = np.sqrt(mse)
     r2 = r2_score(actual, predicted)
 
     # Add predictions to dataframe
@@ -78,23 +79,28 @@ def train_and_evaluate_linear_baseline(df):
     # Calculate metrics
     lr_mse = mean_squared_error(y_test, y_pred)
     lr_mae = mean_absolute_error(y_test, y_pred)
+    # calculate RMSE
+    lr_rmse = np.sqrt(lr_mse)
     lr_r2 = r2_score(y_test, y_pred)
 
     print(f"Linear Regression MSE: {lr_mse:.4f}")
     print(f"Linear Regression MAE: {lr_mae:.4f}")
     print(f"Linear Regression R² Score: {lr_r2:.4f}")
+    print(f"Linear Regression RMSE: {lr_rmse:.4f}")
 
     return lr_mse, lr_mae, lr_r2
 
 
 def main():
     parser = argparse.ArgumentParser(description='Calculate metrics between model predictions and actual difficulty')
-    parser.add_argument('--model', required=True, help='Path to the pickle file containing model artifacts')
-    parser.add_argument('--data', required=True, help='Path to the CSV file with question, answer, difficulty columns')
+    # parser.add_argument('--model', required=True, help='Path to the pickle file containing model artifacts')
+    # parser.add_argument('--data', required=True, help='Path to the CSV file with question, answer, difficulty columns')
     parser.add_argument('--output', help='Path to save results CSV (optional)')
     parser.add_argument('--baseline', action='store_true', help='Run a linear regression baseline for comparison')
     args = parser.parse_args()
 
+    args.model = r'/media/omridan/data/work/msc/NLP/NLP_final_project/RAG/models/modernBERT-large-embedding/difficulty_regressor_artifacts_mae0.1897.pkl'
+    args.data = r'/media/omridan/data/work/msc/NLP/NLP_final_project/data/CS_course/DS_tests_with_difficulty_continuous.csv'
     print("--- RAG-based Model Evaluation ---")
     mse, mae, r2, results_df = calculate_prediction_metrics(args.model, args.data)
     print(f"Mean Squared Error: {mse:.4f}")
