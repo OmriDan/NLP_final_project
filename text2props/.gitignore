@@ -6,3 +6,4 @@ dist/
 output*
 __pycache__/
 models/
+.vscode/
