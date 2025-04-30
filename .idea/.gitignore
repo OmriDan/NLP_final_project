@@ -6,3 +6,8 @@
 # Datasource local storage ignored files
 /dataSources/
 /dataSources.local.xml
+/inspectionProfiles
+misc.xml
+modules.xml
+NLP_final_project.iml
+vcs.xml
