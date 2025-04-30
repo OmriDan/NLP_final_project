@@ -202,7 +202,7 @@ def generate_text_embeddings(df):
 
 def main():
     # Load the data
-    file_path = 'data/leetcode/leetcode_train.csv'
+    file_path = 'data/leetcode/leetcode_val.csv'
     df = load_and_explore_data(file_path)
 
     # Run analyses
