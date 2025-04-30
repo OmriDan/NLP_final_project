@@ -56,12 +56,19 @@ You can load your data using the provided utility functions in `parse_data.py`. 
 If you use this framework, please cite the original *EDM-Question-Difficulty* paper:
 
 ```bibtex
-@misc{readerbench_2020,
-  author = {ReaderBench},
-  title = {EDM-Question-Difficulty},
-  year = {2020},
-  publisher = {GitHub},
-  url = {https://github.com/readerbench/EDM-Question-Difficulty}
+@inproceedings{2024.EDM-posters.90,
+ abstract = {Assessing the difficulty of reading comprehension questions is crucial to educational methodologies and language understanding technologies. Traditional methods of assessing question difficulty frequently rely on human judgments or shallow metrics, often failing to accurately capture the intricate cognitive demands of answering a question. This study delves into the task of automated question difficulty assessment, exploring the potential of leveraging Large Language Models (LLMs) to enhance the comprehension of the context and interconnections required to address a question. Our method incorporates multiple LLM-based difficulty measures and compares their performance on the FairytaleQA educational dataset with the ground truth benchmarks of human-annotated difficulty labels. Besides comparing different computational methods, this study also bridges the gap between machine and human understanding of question difficulty by analyzing the correlation between LLM-based measures and human perceptions. Our results provide valuable insights into the capabilities of LLMs in educational settings, particularly in the context of reading comprehension.},
+ address = {Atlanta, Georgia, USA},
+ author = {Andreea Dutulescu and Stefan Ruseti and Mihai Dascalu and Danielle Mcnamara},
+ booktitle = {Proceedings of the 17th International Conference on Educational Data Mining},
+ doi = {10.5281/zenodo.12729956},
+ editor = {Benjamin PaaÃŸen and Carrie Demmans Epp},
+ isbn = {978-1-7336736-5-5},
+ month = {July},
+ pages = {802--808},
+ publisher = {International Educational Data Mining Society},
+ title = {How Hard can this Question be? An Exploratory Analysis of Features Assessing Question Difficulty using LLMs},
+ year = {2024}
 }
 ```
 
