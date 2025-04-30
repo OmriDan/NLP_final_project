@@ -39,7 +39,6 @@ def prepare_knowledge_corpus(file_path=None, dataset_name=None, split=None):
                     chunks = text_splitter.split_text(content)
                     documents.extend([Document(
                         page_content=chunk,
-                        metadata={"difficulty": item.get("difficulty", "")}
                     ) for chunk in chunks])
 
             elif dataset_name == "open-r1/github-python-code-to-desc":
@@ -65,7 +64,7 @@ def prepare_knowledge_corpus(file_path=None, dataset_name=None, split=None):
                     answer = item.get("answer", "")
                     lecture = item.get("lecture", "")
                     solution = item.get("solution", "")
-                    content = f"Question: {question}\nAnswer: {answer}\nExplanation: {solution}\nContext: {lecture}"
+                    content = f"Context question: {question}\nContext answer: {answer}\n Context explanation: {solution}\nAdditional Context: {lecture}"
                     chunks = text_splitter.split_text(content)
                     documents.extend([Document(page_content=chunk) for chunk in chunks])
 
@@ -126,23 +125,38 @@ def prepare_knowledge_corpus(file_path=None, dataset_name=None, split=None):
                         text_fields = [f for f in available_fields if isinstance(item[f], str) and len(item[f]) > 10]
 
                         if text_fields:
-                            longest_field = max(text_fields, key=lambda f: len(item[f]))
-                            content = item[longest_field]
+                            # Define question and answer related field groups
+                            question_fields = ['problem', 'question', 'instruction', 'input', 'problem_statement',
+                                               'title', 'body', 'mathematics_problem']
+                            answer_fields = ['answer', 'answers', 'correct_answer', 'solution', 'solutions', 'output', 'explanation',
+                                             'gold_standard_solution', 'mathematics_solution', 'proof']
 
-                            difficulty_info = ""
-                            for field in ['difficulty', 'difficulty_level', 'complexity', 'level']:
-                                if field in item and item[field] is not None:
-                                    difficulty_info = f"Difficulty: {item[field]}. "
-                                    break
+                            # Extract question content
+                            question_content = []
+                            for field in question_fields:
+                                if field in item and isinstance(item[field], str) and len(item[field]) > 10:
+                                    question_content.append(f"{field.capitalize()}: {item[field]}")
 
-                            full_content = difficulty_info + content
+                            # Extract answer content
+                            answer_content = []
+                            for field in answer_fields:
+                                if field in item and isinstance(item[field], str) and len(item[field]) > 10:
+                                    answer_content.append(f"{field.capitalize()}: {item[field]}")
+
+                            # Combine question and answer content
+                            if question_content or answer_content:
+                                full_content = "\n\n".join(question_content + answer_content)
+                            else:
+                                # Fallback to longest field if no question/answer fields identified
+                                longest_field = max(text_fields, key=lambda f: len(item[f]))
+                                full_content = item[longest_field]
+
                             chunks = text_splitter.split_text(full_content)
                             for chunk in chunks:
                                 documents.append(Document(
                                     page_content=chunk,
                                     metadata={
                                         "source": dataset_name,
-                                        "difficulty": item.get("difficulty", "")
                                     }
                                 ))
 
