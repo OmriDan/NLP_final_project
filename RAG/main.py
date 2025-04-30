@@ -12,11 +12,11 @@ def main():
     pytorch_lightning.utilities.seed.seed_everything(42)
     # Wandb configuration
     wandb_project = "rag-difficulty-regressor"
-    wandb_run_name = "rag-training-run-1"
+    wandb_run_name = "modernBERT-base-embedding"
 
     # Load your data
-    train_df = pd.read_csv("./data/leetcode/leetcode_train.csv")
-    valid_df = pd.read_csv("./data/leetcode/leetcode_val.csv")
+    train_df = pd.read_csv("/media/omridan/data/work/msc/NLP/NLP_final_project/data/leetcode/leetcode_train.csv")
+    valid_df = pd.read_csv("/media/omridan/data/work/msc/NLP/NLP_final_project/data/leetcode/leetcode_val.csv")
 
     # Enhanced knowledge corpus with CS and programming datasets
     knowledge_corpus = []
@@ -30,18 +30,18 @@ def main():
 
     # Add programming-specific datasets
     programming_datasets = [
-        ("codeparrot/apps", "train[:2000]"),  # Programming problems
-        ("codeparrot/github-jupyter-code-to-text", "train[:500]"),  # Code documentation
-        ("open-r1/verifiable-coding-problems-python-10k", "train[:2000]"),  # Python exercises
-        ("sahil2801/CodeAlpaca-20k", "train[:500]"),  # Code instruction data
+        ("codeparrot/apps", "train[:200]"),  # Programming problems
+        ("codeparrot/github-jupyter-code-to-text", "train[:200]"),  # Code documentation
+        ("open-r1/verifiable-coding-problems-python-10k", "train[:200]"),  # Python exercises
+        ("sahil2801/CodeAlpaca-20k", "train[:100]"),  # Code instruction data
     ]
 
     # Add CS knowledge and QA datasets
     cs_qa_datasets = [
-        ("squad", "train[:4000]"),  # General QA format
-        ("Kaeyze/computer-science-synthetic-dataset", "train[:6000]"),  # CS-specific QA
-        ("habedi/stack-exchange-dataset", "train[:4000]"),  # CS-specific QA from Stack Exchange
-        ("ajibawa-2023/WikiHow", "train[:300]"),  # Step-by-step guides
+        ("squad", "train[:200]"),  # General QA format
+        ("Kaeyze/computer-science-synthetic-dataset", "train[:300]"),  # CS-specific QA
+        ("habedi/stack-exchange-dataset", "train[:200]"),  # CS-specific QA from Stack Exchange
+        ("ajibawa-2023/WikiHow", "train[:100]"),  # Step-by-step guides
     ]
 
     # Combine all datasets
@@ -71,7 +71,7 @@ def main():
         train_df,
         valid_df,
         knowledge_corpus,
-        model_name="microsoft/deberta-v3-large",
+        model_name="answerdotai/ModernBERT-base",
         embedding_model_name=embedding_model_name,
         wandb_project=wandb_project,
         wandb_run_name=wandb_run_name
