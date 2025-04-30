@@ -92,9 +92,12 @@ def preprocess_function(examples, tokenizer, retrievals=None, use_rag=False):
     texts = []
     for i, (q, a) in enumerate(zip(examples["content"], examples["python"])):
         if use_rag and retrievals and i < len(retrievals):
-            # Add retrieval context
-            context = " ".join(retrievals[i])
-            text = f"Context: {context} Question: {q} Answer: {a}"
+            # Extract text content from Document objects
+            instructions = f"Classify the difficulty of the following problem and solution pair. "
+            problem_solution = f"Problem: {q} Solution: {a} "
+            fixed_text = instructions + problem_solution
+            context = " ".join([doc.page_content for doc in retrievals[i][:1]])
+            text = fixed_text + "**END OF PAIR** Additional Context: " + context
         else:
             text = f"Question: {q} Answer: {a}"
         texts.append(text)
@@ -109,11 +112,55 @@ def preprocess_function(examples, tokenizer, retrievals=None, use_rag=False):
             labels.append(label2id[label.lower()])
 
     # Tokenize the texts
-    tokenized = tokenizer(texts, truncation=True)
+    tokenized = tokenizer(texts, truncation=True, max_length=2048)
     tokenized["labels"] = labels
 
     return tokenized
 
+
+def calculate_weighted_f1(dataset=None, class_distribution=None, f1_scores_list=None):
+    """
+    Calculate weighted F1 scores based on class distribution
+
+    Args:
+        dataset: Optional - Dataset containing difficulty labels
+        class_distribution: Optional - Tuple (easy_prop, medium_prop, hard_prop)
+        f1_scores_list: List of F1 score tuples (easy, medium, hard)
+
+    Returns:
+        List of weighted F1 scores
+    """
+    # Get class distribution either from dataset or use provided distribution
+    if class_distribution is None and dataset is not None:
+        # Count occurrences of each difficulty
+        difficulties = [example["difficulty"].lower() if example["difficulty"] else None
+                        for example in dataset["train"]]
+        difficulties = [d for d in difficulties if d is not None]
+
+        total = len(difficulties)
+        easy_count = difficulties.count("easy")
+        medium_count = difficulties.count("medium")
+        hard_count = difficulties.count("hard")
+
+        # Calculate proportions
+        easy_prop = easy_count / total
+        medium_prop = medium_count / total
+        hard_prop = hard_count / total
+
+        print(f"Class distribution: easy={easy_prop:.3f}, medium={medium_prop:.3f}, hard={hard_prop:.3f}")
+    elif class_distribution is not None:
+        easy_prop, medium_prop, hard_prop = class_distribution
+    else:
+        raise ValueError("Either dataset or class_distribution must be provided")
+
+    # Calculate weighted F1 for each set of F1 scores
+    weighted_f1_scores = []
+    for f1_scores in f1_scores_list:
+        f1_easy, f1_medium, f1_hard = f1_scores
+        weighted_f1 = (easy_prop * f1_easy) + (medium_prop * f1_medium) + (hard_prop * f1_hard)
+        weighted_f1_scores.append(weighted_f1)
+
+    return weighted_f1_scores
 
 def train_and_evaluate_model(model_name, filtered_dataset, train_retrievals=None, val_retrievals=None, use_rag=False):
     """Train and evaluate a model from a given checkpoint"""
@@ -214,13 +261,20 @@ def main(use_rag=False):
 
     # Filter out entries with None difficulty
     filtered_leetcode_df = leetcode_df.filter(lambda example: example["difficulty"] is not None)
-
+    f1_scores_list = [
+        (0.519, 0.62, 0.347),
+        (0.537, 0.645, 0.408),
+        (0.526, 0.636, 0.348),
+        (0.567, 0.697, 0.43)
+    ]
+    weighted_f1 = calculate_weighted_f1(dataset=filtered_leetcode_df, f1_scores_list=f1_scores_list)
+    print("Weighted F1 scores:", [f"{score:.4f}" for score in weighted_f1])
     # List of models to test
     models_to_test = [
         # "distilbert-base-uncased",  # Small and fast (66M parameters)
         # "bert-base-uncased",  # Classic BERT (110M parameters)
         # "roberta-base",  # Improved BERT variant (125M parameters)
-        # "answerdotai/ModernBERT-base",  # (110M parameters)
+        "answerdotai/ModernBERT-base",  # (110M parameters)
         # "bert-large-uncased",  # Large BERT variant (345M parameters)
         # "roberta-large",  # Large RoBERTa variant (355M parameters)
         "answerdotai/ModernBERT-large",  # Large variant of ModernBERT (355M parameters)
