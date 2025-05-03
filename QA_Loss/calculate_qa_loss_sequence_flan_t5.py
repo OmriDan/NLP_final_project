@@ -104,6 +104,6 @@ def process_and_regress(dataset_type, source, dataset_name, estimator = None, es
     )
 
 if __name__ == "__main__":
-    # process_and_regress('csv', 'DS_tests_with_difficulty.csv', 'DS', estimator=RandomForestRegressor ,estimator_params={'max_depth': 5, 'n_estimators': 250})
-    # process_and_regress('csv', 'merged_leetcode_df.csv', 'Leetcode', estimator=RandomForestRegressor ,estimator_params={'max_depth': 5, 'n_estimators': 250})
     process_and_regress('dataset', 'NovaSky-AI/labeled_numina_difficulty_162K', 'NovaSky',estimator=RandomForestRegressor ,estimator_params={'max_depth': 5, 'n_estimators': 250})
+    # process_and_regress('csv', 'merged_leetcode_df.csv', 'Leetcode')
+    # process_and_regress('csv', 'DS_tests_with_difficulty.csv', 'DS')
