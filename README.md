@@ -1,5 +1,7 @@
 # NLP Final Project: Question Difficulty Estimation
 
+Created by Omri Dan, Idan Drori and Tom Rapoport
+
 ## Overview
 This project focuses on developing a model to predict the difficulty of exam questions based on the text of the question and a corresponding teacher-provided answer. The primary goal is to assess whether large language models (LLMs) require subject-specific proficiency to accurately estimate question difficulty. The project leverages a dataset from the Data Structures course (0368-2158), which includes historical exam questions, teacher answers, and student performance metrics.
 
@@ -64,4 +66,4 @@ To get started with the project:
 2. Follow the setup instructions in the `README.md` files located in each folder.
 
 ## Acknowledgments
-We thank the staff of the Workshop on Applying Large Language Models for Education for providing access to the dataset used in this project.
+We thank the staff of the Workshop on Applying Large Language Models to Education, Dr. Michal Kleinbort, Dr. Amir Rubinstein, Prof. Hanoch Levy, and Adi Haviv, for providing access to the Data Structures Exam dataset and for their guidance. And we would like to thank Maor Ivgy, lecturer for the Natural Language Processing course, for his support and direction throughout this project.
